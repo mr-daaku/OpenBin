@@ -1,0 +1,209 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-neutral-50 text-neutral-900 antialiased dark:bg-neutral-950 dark:text-neutral-100;
+}
+
+/* ---------------------------------------------------------- scrollbars */
+.scroll-slim::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.scroll-slim::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scroll-slim::-webkit-scrollbar-thumb {
+  @apply rounded-full border-2 border-transparent bg-neutral-300 dark:bg-neutral-700;
+}
+
+/* ---------------------------------------------------------- markdown */
+.md {
+  font-size: 15px;
+  line-height: 1.7;
+  word-break: break-word;
+}
+.md > * + * {
+  margin-top: 1rem;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 1.5rem;
+}
+.md h1 {
+  font-size: 1.45rem;
+}
+.md h2 {
+  font-size: 1.2rem;
+}
+.md h3 {
+  font-size: 1.05rem;
+}
+.md h4 {
+  font-size: 1rem;
+}
+.md ul,
+.md ol {
+  padding-left: 1.5rem;
+}
+.md ul {
+  list-style: disc;
+}
+.md ol {
+  list-style: decimal;
+}
+.md li + li {
+  margin-top: 0.3rem;
+}
+.md a {
+  @apply text-blue-600 underline underline-offset-2 dark:text-blue-400;
+}
+.md blockquote {
+  @apply border-l-2 border-neutral-300 pl-4 text-neutral-500 dark:border-neutral-700 dark:text-neutral-400;
+}
+.md hr {
+  @apply border-neutral-200 dark:border-neutral-800;
+}
+.md table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.md th,
+.md td {
+  @apply border border-neutral-200 px-3 py-2 text-left dark:border-neutral-800;
+}
+.md th {
+  @apply bg-neutral-100 font-semibold dark:bg-neutral-900;
+}
+.md pre {
+  @apply my-0 overflow-x-auto rounded-2xl border border-neutral-200 bg-neutral-100 p-4 dark:border-neutral-800 dark:bg-neutral-900;
+}
+.md pre code {
+  @apply block bg-transparent p-0 text-[13px] leading-6;
+}
+.md :not(pre) > code {
+  @apply rounded-md bg-neutral-200 px-1.5 py-0.5 text-[13px] dark:bg-neutral-800;
+}
+.code-header {
+  @apply flex items-center justify-between border-b border-neutral-200 bg-neutral-200/70 px-4 py-1.5 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-800/70 dark:text-neutral-400;
+}
+.code-shell {
+  @apply my-0 overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-100 dark:border-neutral-800 dark:bg-neutral-900;
+}
+.code-shell pre {
+  @apply border-0 rounded-none;
+}
+
+/* ---------------------------------------------------------- highlight.js */
+:root {
+  --hl-plain: #24292f;
+  --hl-comment: #6a737d;
+  --hl-keyword: #cf222e;
+  --hl-string: #0a3069;
+  --hl-title: #8250df;
+  --hl-attr: #0550ae;
+  --hl-number: #0550ae;
+  --hl-built_in: #953800;
+  --hl-tag: #116329;
+}
+.dark {
+  --hl-plain: #e6edf3;
+  --hl-comment: #8b949e;
+  --hl-keyword: #ff7b72;
+  --hl-string: #a5d6ff;
+  --hl-title: #d2a8ff;
+  --hl-attr: #79c0ff;
+  --hl-number: #79c0ff;
+  --hl-built_in: #ffa657;
+  --hl-tag: #7ee787;
+}
+.hljs {
+  color: var(--hl-plain);
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag,
+.hljs-name {
+  color: var(--hl-keyword);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-symbol,
+.hljs-template-tag {
+  color: var(--hl-string);
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.function_,
+.hljs-section,
+.hljs-selector-id {
+  color: var(--hl-title);
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-meta {
+  color: var(--hl-attr);
+}
+.hljs-number,
+.hljs-bullet,
+.hljs-link,
+.hljs-code {
+  color: var(--hl-number);
+}
+.hljs-built_in,
+.hljs-type,
+.hljs-params {
+  color: var(--hl-built_in);
+}
+.hljs-tag {
+  color: var(--hl-tag);
+}
+
+/* ---------------------------------------------------------- typing dots */
+@keyframes openbin-blink {
+  0%,
+  80%,
+  100% {
+    opacity: 0.2;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+.typing-dot {
+  animation: openbin-blink 1.2s infinite both;
+}
+.typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
