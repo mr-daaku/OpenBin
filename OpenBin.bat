@@ -33,15 +33,27 @@ if not exist "%ROOT%frontend\node_modules" (
   exit /b 1
 )
 
-rem --------------------------------------------- start both services
+rem --------------------------------------------- start BOTH in THIS window
 echo Starting OpenBin...
-start "OpenBin - Backend"  /min /d "%ROOT%backend"  cmd /k "venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000"
-start "OpenBin - Frontend" /min /d "%ROOT%frontend" cmd /k "npm run dev"
+echo   Backend  : http://127.0.0.1:8000
+echo   Frontend : http://localhost:5173
+echo.
+echo   Both services run in this same window.
+echo   Press Ctrl+C (or close this window) to stop everything.
+echo.
 
-rem --------------------------------------------- wait until both answer, then open the browser
+pushd "%ROOT%backend"
+start "OpenBin backend"  /b cmd /c "venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000"
+popd
+
+pushd "%ROOT%frontend"
+start "OpenBin frontend" /b cmd /c "npm run dev"
+popd
+
+rem --------------------------------------------- wait until both answer
 set /a tries=0
 :wait
-ping -n 3 127.0.0.1 >nul
+ping -n 2 127.0.0.1 >nul
 curl.exe -s -o nul http://127.0.0.1:8000/api/settings
 if errorlevel 1 goto retry
 curl.exe -s -o nul http://localhost:5173/
@@ -50,20 +62,15 @@ goto ready
 
 :retry
 set /a tries+=1
-if %tries% lss 25 goto wait
+if %tries% lss 30 goto wait
 echo [WARN] A service did not answer in time. Opening the browser anyway.
-echo        Check the "OpenBin - Backend" and "OpenBin - Frontend" windows for errors.
+echo        Scroll up in this window to see which one failed.
 
 :ready
 start "" http://localhost:5173
+echo.
+echo   OpenBin is up. You can close this window any time to stop it.
+echo.
 
-echo.
-echo   OpenBin is up:
-echo     Frontend : http://localhost:5173
-echo     Backend  : http://127.0.0.1:8000
-echo.
-echo   To stop: close the "OpenBin - Backend" and "OpenBin - Frontend" windows.
-echo   You can close this window now.
-echo.
-pause
-exit /b 0
+rem --------------------------------------------- keep the window alive
+ping -t 127.0.0.1 >nul

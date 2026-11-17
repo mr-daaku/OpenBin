@@ -160,13 +160,13 @@ export default function SettingsModal({ settings, onClose, onSaved }) {
           </div>
 
           <div>
-            <Label hint="optional">System prompt</Label>
+            <Label hint="default included">System prompt</Label>
             <textarea
               value={form.system_prompt}
               onChange={set('system_prompt')}
-              rows={3}
+              rows={4}
               placeholder="e.g. You are a concise coding assistant."
-              className={`${inputClass} resize-y`}
+              className={`${inputClass} resize-y font-mono text-[12px] leading-5`}
             />
           </div>
 
