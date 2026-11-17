@@ -32,10 +32,16 @@ export const api = {
   testProvider: (id, data) => request(`/api/providers/${id}/test`, { method: 'POST', body: JSON.stringify(data) }),
   togglePinned: (id, model) => request(`/api/providers/${id}/pinned`, { method: 'POST', body: JSON.stringify({ model }) }),
 
-  listChats: () => request('/api/chats'),
+  listChats: (q) => request(q ? `/api/chats?q=${encodeURIComponent(q)}` : '/api/chats'),
   createChat: () => request('/api/chats', { method: 'POST' }),
   renameChat: (id, title) => request(`/api/chats/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
+  updateChat: (id, data) => request(`/api/chats/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteChat: (id) => request(`/api/chats/${id}`, { method: 'DELETE' }),
   getMessages: (id) => request(`/api/chats/${id}/messages`),
   saveChatSettings: (id, data) => request(`/api/chats/${id}/settings`, { method: 'PUT', body: JSON.stringify(data) }),
+  autoTitle: (id) => request(`/api/chats/${id}/auto-title`, { method: 'POST', body: '{}' }),
+  importChat: (data) => request('/api/chats/import', { method: 'POST', body: JSON.stringify(data) }),
+
+  editMessage: (id, content) => request(`/api/messages/${id}`, { method: 'PATCH', body: JSON.stringify({ content }) }),
+  deleteMessage: (id) => request(`/api/messages/${id}`, { method: 'DELETE' }),
 }

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Check, Copy } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Check, Copy, Pencil, RefreshCw, Trash2, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -15,6 +15,35 @@ import css from 'highlight.js/lib/languages/css'
 import sql from 'highlight.js/lib/languages/sql'
 
 const LANGUAGES = { javascript, typescript, python, bash, json, xml, css, sql }
+
+// Math support is optional and heavy - only pull it in if a message actually
+// uses $...$ / $$...$$, and only once per session.
+let mathPromise = null
+function loadMath() {
+  if (!mathPromise) {
+    mathPromise = Promise.all([
+      import('remark-math'),
+      import('rehype-katex'),
+      import('katex/dist/katex.min.css'),
+    ]).then(([remark, rehype]) => ({ remark: remark.default, rehype: rehype.default }))
+  }
+  return mathPromise
+}
+
+const MATH_RE = /(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|(?<!\\)\$(?!\s)[^$\n]+?(?<!\s)(?<!\\)\$)/
+
+function useMathPlugins(active) {
+  const [plugins, setPlugins] = useState(null)
+  useEffect(() => {
+    if (!active) return
+    let alive = true
+    loadMath().then((p) => alive && setPlugins(p)).catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [active])
+  return plugins
+}
 
 function toText(node) {
   if (node == null || node === false) return ''
@@ -75,8 +104,37 @@ const mdComponents = {
   ),
 }
 
-export default function Message({ message, streaming }) {
+function ActionButton({ onClick, label, children, danger }) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className={`rounded-lg p-1.5 opacity-0 transition focus:opacity-100 group-hover:opacity-100 ${
+        danger
+          ? 'text-neutral-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-950/50'
+          : 'text-neutral-400 hover:bg-neutral-200 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
+export default function Message({
+  message,
+  streaming,
+  busy,
+  onRegenerate,
+  onEdit,
+  onDelete,
+}) {
   const [copied, setCopied] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(message.content)
+
+  const isUser = message.role === 'user'
+  const hasActions = !streaming && !busy && typeof onEdit === 'function'
 
   const copy = async () => {
     try {
@@ -88,23 +146,37 @@ export default function Message({ message, streaming }) {
     }
   }
 
-  const copyButton = message.content ? (
-    <button
-      onClick={copy}
-      className="mt-1 shrink-0 rounded-lg p-1.5 text-neutral-400 opacity-0 transition hover:bg-neutral-200 focus:opacity-100 group-hover:opacity-100 dark:hover:bg-neutral-800"
-      aria-label="Copy message"
-    >
-      {copied ? <Check size={15} /> : <Copy size={15} />}
-    </button>
-  ) : null
+  const startEdit = () => {
+    setDraft(message.content)
+    setEditing(true)
+  }
 
-  if (message.role === 'user') {
+  const saveEdit = async () => {
+    const text = draft.trim()
+    setEditing(false)
+    if (!text || text === message.content) return
+    await onEdit(message.id, text)
+  }
+
+  if (isUser) {
     return (
       <div className="group flex items-start justify-end gap-2">
+        {hasActions && (
+          <div className="flex shrink-0 items-center pt-1">
+            <ActionButton onClick={startEdit} label="Edit and resend">
+              <Pencil size={14} />
+            </ActionButton>
+            <ActionButton onClick={() => onDelete(message.id)} label="Delete message" danger>
+              <Trash2 size={14} />
+            </ActionButton>
+            <ActionButton onClick={copy} label="Copy message">
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+            </ActionButton>
+          </div>
+        )}
         <div className="max-w-[85%] rounded-3xl bg-neutral-200 px-4 py-2.5 text-[15px] leading-7 whitespace-pre-wrap break-words dark:bg-neutral-800">
           {message.content}
         </div>
-        {copyButton}
       </div>
     )
   }
@@ -119,29 +191,86 @@ export default function Message({ message, streaming }) {
     </span>
   ) : null
 
+  const body = editing ? (
+    <div className="space-y-2">
+      <textarea
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        rows={Math.min(14, Math.max(3, draft.split('\n').length + 1))}
+        className="scroll-slim w-full resize-y rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-neutral-500 dark:border-neutral-700 dark:bg-neutral-800"
+      />
+      <div className="flex gap-2">
+        <button
+          onClick={saveEdit}
+          className="rounded-lg bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-700 dark:bg-white dark:text-neutral-900"
+        >
+          Save &amp; resend
+        </button>
+        <button
+          onClick={() => setEditing(false)}
+          className="rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-medium hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  ) : showTyping ? (
+    <div className="flex items-center gap-1.5 py-2">
+      <span className="typing-dot h-2 w-2 rounded-full bg-neutral-400 dark:bg-neutral-500" />
+      <span className="typing-dot h-2 w-2 rounded-full bg-neutral-400 dark:bg-neutral-500" />
+      <span className="typing-dot h-2 w-2 rounded-full bg-neutral-400 dark:bg-neutral-500" />
+    </div>
+  ) : (
+    <MarkdownBody content={message.content} />
+  )
+
   return (
     <div className="group flex items-start gap-2">
       <div className="min-w-0 flex-1">
         {modelBadge}
-        {showTyping ? (
-          <div className="flex items-center gap-1.5 py-2">
-            <span className="typing-dot h-2 w-2 rounded-full bg-neutral-400 dark:bg-neutral-500" />
-            <span className="typing-dot h-2 w-2 rounded-full bg-neutral-400 dark:bg-neutral-500" />
-            <span className="typing-dot h-2 w-2 rounded-full bg-neutral-400 dark:bg-neutral-500" />
-          </div>
-        ) : (
-          <div className="md">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              rehypePlugins={[[rehypeHighlight, { languages: LANGUAGES, detect: false }]]}
-              components={mdComponents}
-            >
-              {message.content}
-            </ReactMarkdown>
+        {body}
+        {hasActions && !editing && (
+          <div className="mt-1 flex items-center gap-0.5">
+            {!isUser && (
+              <ActionButton onClick={() => onRegenerate(message.id)} label="Regenerate">
+                <RefreshCw size={14} />
+              </ActionButton>
+            )}
+            <ActionButton onClick={startEdit} label="Edit and resend">
+              <Pencil size={14} />
+            </ActionButton>
+            <ActionButton onClick={() => onDelete(message.id)} label="Delete message" danger>
+              <Trash2 size={14} />
+            </ActionButton>
+            <ActionButton onClick={copy} label="Copy message">
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+            </ActionButton>
           </div>
         )}
       </div>
-      {copyButton}
+      {editing && (
+        <button onClick={() => setEditing(false)} className="shrink-0 rounded p-1.5 text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200" aria-label="Cancel edit">
+          <X size={15} />
+        </button>
+      )}
+    </div>
+  )
+}
+
+function MarkdownBody({ content }) {
+  const math = useMathPlugins(MATH_RE.test(content))
+  const plugins = [remarkGfm]
+  const rehype = [[rehypeHighlight, { languages: LANGUAGES, detect: false }]]
+  if (math) {
+    plugins.push(math.remark)
+    rehype.push([math.rehype, { throwOnError: false }])
+  }
+  return (
+    <div className="md">
+      <ReactMarkdown remarkPlugins={plugins} rehypePlugins={rehype} components={mdComponents}>
+        {content}
+      </ReactMarkdown>
     </div>
   )
 }

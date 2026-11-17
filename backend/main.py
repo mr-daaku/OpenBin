@@ -102,6 +102,8 @@ def init_db() -> None:
             "ALTER TABLE chats ADD COLUMN max_tokens INTEGER",
             "ALTER TABLE chats ADD COLUMN top_p REAL",
             "ALTER TABLE chats ADD COLUMN system_prompt TEXT",
+            "ALTER TABLE chats ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE chats ADD COLUMN incognito INTEGER NOT NULL DEFAULT 0",
         ):
             try:
                 conn.execute(stmt)
@@ -298,8 +300,13 @@ class SettingsIn(BaseModel):
     theme: str | None = None
 
 
-class TitleIn(BaseModel):
-    title: str
+class MessageEditIn(BaseModel):
+    content: str
+
+
+class ImportIn(BaseModel):
+    title: str = "Imported Chat"
+    messages: list[dict] = []
 
 
 # ---------------------------------------------------------------- settings api
@@ -565,7 +572,10 @@ async def provider_test(provider_id: int, body: SettingsIn):
 
 # ---------------------------------------------------------------- chats api
 
-CHAT_COLS = "id, title, created_at, model, temperature, max_tokens, top_p, system_prompt"
+CHAT_COLS = (
+    "id, title, created_at, pinned, incognito, model, temperature, "
+    "max_tokens, top_p, system_prompt"
+)
 
 
 def chat_settings(row: sqlite3.Row) -> dict:
@@ -578,12 +588,34 @@ def chat_settings(row: sqlite3.Row) -> dict:
     }
 
 
+def chat_out(row: sqlite3.Row) -> dict:
+    return {
+        **{k: row[k] for k in ("id", "title", "created_at", "pinned", "incognito")},
+        "pinned": bool(row["pinned"]),
+        "incognito": bool(row["incognito"]),
+        "settings": chat_settings(row),
+    }
+
+
 @app.get("/api/chats")
-def list_chats():
+def list_chats(q: str | None = None):
     conn = connect()
     try:
-        rows = conn.execute(f"SELECT {CHAT_COLS} FROM chats ORDER BY id DESC").fetchall()
-        return [{**dict(r), "settings": chat_settings(r)} for r in rows]
+        term = (q or "").strip()
+        if term:
+            like = f"%{term}%"
+            rows = conn.execute(
+                f"SELECT {CHAT_COLS} FROM chats "
+                "WHERE title LIKE ? "
+                "OR id IN (SELECT chat_id FROM messages WHERE content LIKE ?) "
+                "ORDER BY pinned DESC, id DESC",
+                (like, like),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT {CHAT_COLS} FROM chats ORDER BY pinned DESC, id DESC"
+            ).fetchall()
+        return [chat_out(r) for r in rows]
     finally:
         conn.close()
 
@@ -595,7 +627,7 @@ def create_chat():
         cur = conn.execute("INSERT INTO chats (title) VALUES ('New Chat')")
         conn.commit()
         row = conn.execute(f"SELECT {CHAT_COLS} FROM chats WHERE id = ?", (cur.lastrowid,)).fetchone()
-        return {**dict(row), "settings": chat_settings(row)}
+        return chat_out(row)
     finally:
         conn.close()
 
@@ -637,21 +669,41 @@ def put_chat_settings(chat_id: int, body: ChatSettingsIn):
                     (*updates.values(), chat_id),
                 )
         fresh = conn.execute(f"SELECT {CHAT_COLS} FROM chats WHERE id = ?", (chat_id,)).fetchone()
-        return {**dict(fresh), "settings": chat_settings(fresh)}
+        return chat_out(fresh)
     finally:
         conn.close()
 
 
+class ChatUpdateIn(BaseModel):
+    title: str | None = None
+    pinned: bool | None = None
+    incognito: bool | None = None
+
+
 @app.patch("/api/chats/{chat_id}")
-def rename_chat(chat_id: int, body: TitleIn):
+def update_chat(chat_id: int, body: ChatUpdateIn):
     conn = connect()
     try:
-        cur = conn.execute("UPDATE chats SET title = ? WHERE id = ?", (body.title.strip()[:80], chat_id))
-        conn.commit()
-        if cur.rowcount == 0:
+        row = conn.execute("SELECT id FROM chats WHERE id = ?", (chat_id,)).fetchone()
+        if row is None:
             return JSONResponse({"error": "Chat not found"}, status_code=404)
-        row = conn.execute(f"SELECT {CHAT_COLS} FROM chats WHERE id = ?", (chat_id,)).fetchone()
-        return {**dict(row), "settings": chat_settings(row)}
+        updates: dict = {}
+        if body.title is not None:
+            updates["title"] = body.title.strip()[:80] or "New Chat"
+        if body.pinned is not None:
+            updates["pinned"] = 1 if body.pinned else 0
+        if body.incognito is not None:
+            updates["incognito"] = 1 if body.incognito else 0
+            if body.incognito and body.title is None:
+                updates["title"] = "Incognito"
+        if updates:
+            with conn:
+                conn.execute(
+                    f"UPDATE chats SET {', '.join(f'{k} = ?' for k in updates)} WHERE id = ?",
+                    (*updates.values(), chat_id),
+                )
+        fresh = conn.execute(f"SELECT {CHAT_COLS} FROM chats WHERE id = ?", (chat_id,)).fetchone()
+        return chat_out(fresh)
     finally:
         conn.close()
 
@@ -686,24 +738,157 @@ def list_messages(chat_id: int):
         conn.close()
 
 
+@app.patch("/api/messages/{message_id}")
+def edit_message(message_id: int, body: MessageEditIn):
+    """Edit a message and drop everything after it (edit & resend)."""
+    conn = connect()
+    try:
+        row = conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
+        if row is None:
+            return JSONResponse({"error": "Message not found"}, status_code=404)
+        content = body.content.strip()
+        if not content:
+            return JSONResponse({"error": "Message cannot be empty"}, status_code=400)
+        with conn:
+            conn.execute("UPDATE messages SET content = ? WHERE id = ?", (content, message_id))
+            removed = conn.execute(
+                "DELETE FROM messages WHERE chat_id = ? AND id > ?",
+                (row["chat_id"], message_id),
+            ).rowcount
+        fresh = conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
+        return {**dict(fresh), "removed_after": removed}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/messages/{message_id}")
+def delete_message(message_id: int):
+    conn = connect()
+    try:
+        cur = conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+        conn.commit()
+        if cur.rowcount == 0:
+            return JSONResponse({"error": "Message not found"}, status_code=404)
+        return {"deleted": message_id}
+    finally:
+        conn.close()
+
+
+@app.post("/api/chats/{chat_id}/auto-title")
+async def auto_title(chat_id: int):
+    """Name the chat from its first user message with one tiny model call."""
+    st = load_settings()
+    conn = connect()
+    try:
+        chat = conn.execute("SELECT id, title FROM chats WHERE id = ?", (chat_id,)).fetchone()
+        if chat is None:
+            return JSONResponse({"error": "Chat not found"}, status_code=404)
+        first = conn.execute(
+            "SELECT content FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id LIMIT 1",
+            (chat_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if first is None:
+        return JSONResponse({"error": "No messages in this chat yet."}, status_code=400)
+
+    base_url, key = provider_creds(load_provider(), st)
+    if not key:
+        return JSONResponse({"error": "No API key set for the active provider."}, status_code=400)
+    client = AsyncOpenAI(api_key=key, base_url=base_url)
+    try:
+        res = await client.chat.completions.create(
+            model=st["model"],
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Write a short title (max 6 words, no quotes, no punctuation at the end) "
+                    "for this conversation. Reply with the title only.",
+                },
+                {"role": "user", "content": first["content"][:600]},
+            ],
+            max_tokens=800,  # reasoning models burn ~256 tokens before the title
+            temperature=0.3,
+        )
+        title = (res.choices[0].message.content or "").strip().strip('"').strip()[:80]
+    except Exception as exc:  # noqa: BLE001 - surfaced to the UI
+        return JSONResponse({"error": friendly_error(exc)}, status_code=502)
+    if not title:
+        return JSONResponse({"error": "The model returned an empty title."}, status_code=502)
+
+    conn = connect()
+    try:
+        with conn:
+            conn.execute("UPDATE chats SET title = ? WHERE id = ?", (title, chat_id))
+        row = conn.execute(f"SELECT {CHAT_COLS} FROM chats WHERE id = ?", (chat_id,)).fetchone()
+        return chat_out(row)
+    finally:
+        conn.close()
+
+
+@app.post("/api/chats/import")
+def import_chat(body: ImportIn):
+    conn = connect()
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO chats (title) VALUES (?)",
+                (body.title.strip()[:80] or "Imported Chat",),
+            )
+            chat_id = cur.lastrowid
+            rows = []
+            for item in body.messages[:2000]:
+                role = item.get("role")
+                content = item.get("content")
+                if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
+                    continue
+                cur2 = conn.execute(
+                    "INSERT INTO messages (chat_id, role, content, model) VALUES (?, ?, ?, ?)",
+                    (chat_id, role, content[:200000], str(item.get("model") or "") or None),
+                )
+                rows.append(cur2.lastrowid)
+        row = conn.execute(f"SELECT {CHAT_COLS} FROM chats WHERE id = ?", (chat_id,)).fetchone()
+        return {**chat_out(row), "imported": len(rows)}
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------- streaming
 
-async def generate(run: dict, messages: list, chat_id: int):
-    """Yield SSE events, always persisting whatever the model produced."""
-    text = ""
+async def generate(
+    run: dict,
+    messages: list,
+    chat_id: int,
+    target_id: int | None = None,
+    prefix: str = "",
+    persist: bool = True,
+):
+    """Yield SSE events, always persisting whatever the model produced.
+
+    target_id set  -> append to that existing message (Continue).
+    persist False  -> incognito chat, nothing is written.
+    """
+    new_text = ""
     saved = False
 
     def save_partial() -> None:
         nonlocal saved
-        if saved or not text.strip():
+        if saved or not new_text.strip() or not persist:
             return
         saved = True
+        full = prefix + new_text
         conn = connect()
         try:
-            conn.execute(
-                "INSERT INTO messages (chat_id, role, content, model) VALUES (?, 'assistant', ?, ?)",
-                (chat_id, text, run["model"]),
-            )
+            if target_id is not None:
+                conn.execute(
+                    "UPDATE messages SET content = ?, model = ? WHERE id = ?",
+                    (full, run["model"], target_id),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO messages (chat_id, role, content, model) VALUES (?, 'assistant', ?, ?)",
+                    (chat_id, full, run["model"]),
+                )
             conn.commit()
         finally:
             conn.close()
@@ -731,7 +916,7 @@ async def generate(run: dict, messages: list, chat_id: int):
             delta = choices[0].delta
             piece = getattr(delta, "content", None) if delta else None
             if piece:
-                text += piece
+                new_text += piece
                 yield sse({"type": "token", "content": piece})
         yield sse({"type": "done", "model": run["model"]})
     except Exception as exc:  # noqa: BLE001 - reported to the client as SSE
@@ -741,8 +926,18 @@ async def generate(run: dict, messages: list, chat_id: int):
 
 
 class MessageIn(BaseModel):
-    content: str
+    content: str = ""
     model: str | None = None
+    append: bool = True
+    truncate_from: int | None = None
+    continue_last: bool = False
+    history: list[dict] | None = None
+
+
+CONTINUE_NUDGE = (
+    "Continue exactly from where you stopped. Do not repeat any text that is "
+    "already written - just keep going."
+)
 
 
 def build_run(chat: sqlite3.Row, picked_model: str | None, st: dict) -> dict:
@@ -771,37 +966,79 @@ async def stream_message(chat_id: int, body: MessageIn):
         if chat is None:
             return JSONResponse({"error": "Chat not found"}, status_code=404)
 
-        run = build_run(chat, body.model, load_settings())
+        st = load_settings()
+        run = build_run(chat, body.model, st)
+        persist = not bool(chat["incognito"])
+        limit = max(1, int(st["history_limit"]))
 
-        previous = conn.execute(
-            "SELECT COUNT(*) AS n FROM messages WHERE chat_id = ?", (chat_id,)
-        ).fetchone()["n"]
-        conn.execute(
-            "INSERT INTO messages (chat_id, role, content, model) VALUES (?, 'user', ?, ?)",
-            (chat_id, body.content, run["model"]),
-        )
-        if previous == 0:
-            title = body.content.strip()[:40] or "New Chat"
-            conn.execute("UPDATE chats SET title = ? WHERE id = ?", (title, chat_id))
+        if body.truncate_from is not None:
+            # Edit & resend / regenerate: drop the messages being replaced.
+            conn.execute(
+                "DELETE FROM messages WHERE chat_id = ? AND id >= ?",
+                (chat_id, body.truncate_from),
+            )
+
+        target_id = None
+        prefix = ""
+        if body.continue_last:
+            if persist:
+                last = conn.execute(
+                    "SELECT id, role, content FROM messages WHERE chat_id = ? "
+                    "ORDER BY id DESC LIMIT 1",
+                    (chat_id,),
+                ).fetchone()
+                if last is None or last["role"] != "assistant":
+                    return JSONResponse({"error": "Nothing to continue."}, status_code=400)
+                target_id = last["id"]
+                prefix = last["content"]
+
+        if body.append and persist:
+            previous = conn.execute(
+                "SELECT COUNT(*) AS n FROM messages WHERE chat_id = ?", (chat_id,)
+            ).fetchone()["n"]
+            conn.execute(
+                "INSERT INTO messages (chat_id, role, content, model) VALUES (?, 'user', ?, ?)",
+                (chat_id, body.content, run["model"]),
+            )
+            if previous == 0:
+                conn.execute(
+                    "UPDATE chats SET title = ? WHERE id = ?",
+                    (body.content.strip()[:40] or "New Chat", chat_id),
+                )
         conn.commit()
 
-        st = load_settings()
-        limit = max(1, int(st["history_limit"]))
-        rows = conn.execute(
-            "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
-            (chat_id, limit),
-        ).fetchall()
+        # History: the client sends it for incognito chats (nothing in the DB),
+        # otherwise we read our own.
+        if body.history is not None:
+            history = [
+                {"role": m["role"], "content": m["content"]}
+                for m in body.history
+                if isinstance(m, dict)
+                and m.get("role") in ("user", "assistant")
+                and isinstance(m.get("content"), str)
+            ]
+        elif persist:
+            rows = conn.execute(
+                "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
+                (chat_id, limit),
+            ).fetchall()
+            history = [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+        else:
+            history = [{"role": "user", "content": body.content}] if body.append else []
     finally:
         conn.close()
 
-    history = [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
     messages = []
     if run["system_prompt"].strip():
         messages.append({"role": "system", "content": run["system_prompt"]})
     messages.extend(history)
+    if body.continue_last:
+        if not history or history[-1]["role"] != "assistant":
+            return JSONResponse({"error": "Nothing to continue."}, status_code=400)
+        messages.append({"role": "user", "content": CONTINUE_NUDGE})
 
     return StreamingResponse(
-        generate(run, messages, chat_id),
+        generate(run, messages, chat_id, target_id, prefix, persist),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

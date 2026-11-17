@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, Loader2, Menu, Search, SlidersHorizontal, TriangleAlert, X } from 'lucide-react'
-import ChatInput from './ChatInput.jsx'
+import { ChevronDown, Download, Loader2, Menu, MoreHorizontal, Search, Shield, Sparkles, SlidersHorizontal, TriangleAlert, X } from 'lucide-react'
+import ChatInput, { estimateTokens } from './ChatInput.jsx'
 import Message from './Message.jsx'
 import { api } from '../api.js'
 
@@ -13,7 +13,6 @@ function ModelPicker({ model, onPick, defaultModel }) {
   const [manual, setManual] = useState('')
   const wrapRef = useRef(null)
 
-  // Close on outside click.
   useEffect(() => {
     if (!open) return
     const onDown = (e) => {
@@ -56,7 +55,7 @@ function ModelPicker({ model, onPick, defaultModel }) {
     <div className="relative" ref={wrapRef}>
       <button
         onClick={toggle}
-        className="flex max-w-[46vw] items-center gap-1.5 rounded-lg border border-neutral-200 px-2.5 py-1.5 text-xs font-medium hover:bg-neutral-100 md:max-w-[30vw] dark:border-neutral-700 dark:hover:bg-neutral-800"
+        className="flex max-w-[40vw] items-center gap-1.5 rounded-lg border border-neutral-200 px-2.5 py-1.5 text-xs font-medium hover:bg-neutral-100 md:max-w-[26vw] dark:border-neutral-700 dark:hover:bg-neutral-800"
         title={model}
       >
         <span className="truncate font-mono">{model || 'model'}</span>
@@ -216,8 +215,117 @@ function ChatSettingsPanel({ settings, defaultModel, onSave, onClose }) {
           </button>
         )}
       </div>
-      <p className="mt-2 text-[10px] text-neutral-400">Global default: temp {settings.temperature ?? '—'} · max {settings.max_tokens ?? '—'} · top-p {settings.top_p ?? '—'}</p>
-      <p className="text-[10px] text-neutral-400">Default model: {defaultModel}</p>
+      <p className="mt-2 text-[10px] text-neutral-400">Default model: {defaultModel}</p>
+    </div>
+  )
+}
+
+function download(filename, text, type) {
+  const blob = new Blob([text], { type })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+function toMarkdown(title, messages) {
+  const lines = [`# ${title}`, '']
+  for (const m of messages) {
+    if (m.role === 'user') lines.push('## You', '', m.content, '')
+    else if (m.role === 'assistant') lines.push('## OpenBin', '', m.content, '')
+  }
+  return lines.join('\n')
+}
+
+function ChatMenu({ title, messages, incognito, busy, onAutoTitle, onToggleIncognito }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  const slug = (title || 'chat').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'chat'
+  const items = [
+    {
+      label: 'Auto-title with AI',
+      icon: Sparkles,
+      disabled: busy || messages.length === 0,
+      onClick: () => {
+        setOpen(false)
+        onAutoTitle()
+      },
+    },
+    {
+      label: 'Export as Markdown',
+      icon: Download,
+      disabled: messages.length === 0,
+      onClick: () => {
+        setOpen(false)
+        download(`${slug}.md`, toMarkdown(title, messages), 'text/markdown')
+      },
+    },
+    {
+      label: 'Export as JSON',
+      icon: Download,
+      disabled: messages.length === 0,
+      onClick: () => {
+        setOpen(false)
+        download(
+          `${slug}.json`,
+          JSON.stringify({ title, exported_at: new Date().toISOString(), messages }, null, 2),
+          'application/json',
+        )
+      },
+    },
+    {
+      label: incognito ? 'Turn off incognito' : 'Incognito chat',
+      icon: Shield,
+      active: incognito,
+      onClick: () => {
+        setOpen(false)
+        onToggleIncognito()
+      },
+    },
+  ]
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={`rounded-lg border border-neutral-200 p-1.5 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800 ${
+          open ? 'bg-neutral-100 dark:bg-neutral-800' : ''
+        }`}
+        aria-label="Chat actions"
+      >
+        <MoreHorizontal size={15} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-40 mt-2 w-56 rounded-xl border border-neutral-200 bg-white p-1.5 shadow-2xl dark:border-neutral-700 dark:bg-neutral-900">
+          {items.map(({ label, icon: Icon, onClick, disabled, active }) => (
+            <button
+              key={label}
+              onClick={onClick}
+              disabled={disabled}
+              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium transition disabled:opacity-40 ${
+                active
+                  ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900'
+                  : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
+              }`}
+            >
+              <Icon size={14} />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -227,6 +335,7 @@ export default function ChatWindow({
   messages,
   streaming,
   error,
+  stopReason,
   onDismissError,
   onSend,
   onStop,
@@ -236,15 +345,31 @@ export default function ChatWindow({
   chatSettings,
   onSaveChatSettings,
   defaultModel,
+  onRegenerate,
+  onEdit,
+  onDelete,
+  onContinue,
+  onAutoTitle,
+  onToggleIncognito,
+  incognito,
+  busy,
 }) {
   const scrollRef = useRef(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [draft, setDraft] = useState('')
 
-  // Auto-scroll while the answer grows (and on every new message).
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [messages, streaming])
+
+  const last = messages[messages.length - 1]
+  const canContinue =
+    !streaming &&
+    !busy &&
+    !!stopReason &&
+    last?.role === 'assistant' &&
+    !!last.content
 
   return (
     <div className="flex h-full min-w-0 flex-col">
@@ -280,8 +405,23 @@ export default function ChatWindow({
               />
             )}
           </div>
+          <ChatMenu
+            title={title}
+            messages={messages}
+            incognito={incognito}
+            busy={busy}
+            onAutoTitle={onAutoTitle}
+            onToggleIncognito={onToggleIncognito}
+          />
         </div>
       </header>
+
+      {incognito && (
+        <div className="flex items-center justify-center gap-2 bg-amber-50 px-4 py-1.5 text-[11px] text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+          <Shield size={12} />
+          Incognito - this conversation is not being saved.
+        </div>
+      )}
 
       {error && (
         <div className="mx-auto mt-3 flex w-full max-w-3xl items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 md:mx-6 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
@@ -311,6 +451,10 @@ export default function ChatWindow({
                 key={message.id}
                 message={message}
                 streaming={streaming && index === messages.length - 1}
+                busy={busy}
+                onRegenerate={onRegenerate}
+                onEdit={onEdit}
+                onDelete={onDelete}
               />
             ))
           )}
@@ -319,10 +463,23 @@ export default function ChatWindow({
 
       <div className="border-t border-neutral-200 dark:border-neutral-800">
         <div className="mx-auto w-full max-w-3xl px-4 py-4 md:px-6">
-          <ChatInput streaming={streaming} onSend={onSend} onStop={onStop} />
-          <p className="mt-2 text-center text-[11px] text-neutral-400">
-            Local app · your chats stay on this computer
-          </p>
+          {canContinue && (
+            <div className="mb-2 flex justify-center">
+              <button
+                onClick={onContinue}
+                className="flex items-center gap-2 rounded-full border border-neutral-300 bg-white px-4 py-2 text-xs font-medium hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+              >
+                Continue
+              </button>
+            </div>
+          )}
+          <ChatInput streaming={streaming} onSend={onSend} onStop={onStop} onDraftChange={setDraft} />
+          <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-neutral-400">
+            <span className="truncate">Local app · your chats stay on this computer</span>
+            <span className="shrink-0" title="Approximate token count of your draft">
+              {estimateTokens(draft) > 0 ? `≈ ${estimateTokens(draft)} tokens` : 'Ctrl+Enter to send'}
+            </span>
+          </div>
         </div>
       </div>
     </div>

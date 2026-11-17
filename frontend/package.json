@@ -1,7 +1,7 @@
 {
   "name": "openbin-frontend",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,12 +10,15 @@
   },
   "dependencies": {
     "highlight.js": "11.11.1",
+    "katex": "0.16.22",
     "lucide-react": "1.74.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-markdown": "10.1.0",
     "rehype-highlight": "7.0.2",
-    "remark-gfm": "4.0.1"
+    "rehype-katex": "7.0.1",
+    "remark-gfm": "4.0.1",
+    "remark-math": "6.0.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.5",

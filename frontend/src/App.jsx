@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar.jsx'
 import ChatWindow from './components/ChatWindow.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
@@ -19,28 +19,34 @@ export default function App() {
   const [fatal, setFatal] = useState(null)
   const [modelByChat, setModelByChat] = useState({})
   const [chatSettings, setChatSettings] = useState({})
+  const [query, setQuery] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const queryRef = useRef('')
+  queryRef.current = query
 
   const refreshChats = useCallback(
-    () => api.listChats().then((rows) => setChats(rows)),
+    () => api.listChats(queryRef.current).then((rows) => setChats(rows)),
     [],
   )
 
-  const { messages, streaming, error, send, stop, clearError, showError } = useChat(
-    activeId,
-    refreshChats,
-  )
+  const activeChat = chats.find((c) => c.id === activeId)
+  const incognito = !!activeChat?.incognito
+  const currentModel = modelByChat[activeId] || settings?.model || ''
 
-  // Per-chat overrides (model, temperature, ...) travel with the chat row.
+  const { messages, streaming, error, stopReason, send, stop, clearError, showError, regenerate, editAndResend, removeMessage, continueReply } =
+    useChat(activeId, refreshChats, { incognito })
+
+  // Sidebar search (debounced server-side search over titles + message text).
   useEffect(() => {
-    if (activeId == null) return
-    const chat = chats.find((c) => c.id === activeId)
-    if (!chat) return
-    setChatSettings((prev) => ({ ...prev, [activeId]: chat.settings || {} }))
-    setModelByChat((prev) =>
-      prev[activeId] ? prev : { ...prev, [activeId]: chat.settings?.model || settings?.model || '' },
-    )
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, chats])
+    const t = setTimeout(() => {
+      api
+        .listChats(query)
+        .then((rows) => setChats(rows))
+        .catch(() => {})
+    }, 250)
+    return () => clearTimeout(t)
+  }, [query])
 
   // First launch: load settings + chats, open Settings when no API key yet.
   useEffect(() => {
@@ -72,7 +78,7 @@ export default function App() {
     }
   }, [])
 
-  const handleNew = async () => {
+  const handleNew = useCallback(async () => {
     try {
       const chat = await api.createChat()
       setChats((prev) => [chat, ...prev])
@@ -82,14 +88,49 @@ export default function App() {
     } catch (err) {
       showError(err.message)
     }
-  }
+  }, [clearError, showError])
+
+  const handleNewIncognito = useCallback(async () => {
+    try {
+      const chat = await api.createChat()
+      const marked = await api.updateChat(chat.id, { incognito: true })
+      setChats((prev) => [marked, ...prev])
+      setActiveId(marked.id)
+      setSidebarOpen(false)
+      clearError()
+    } catch (err) {
+      showError(err.message)
+    }
+  }, [clearError, showError])
 
   const handleRename = async (id, title) => {
     try {
       const updated = await api.renameChat(id, title)
-      setChats((prev) => prev.map((c) => (c.id === id ? updated : c)))
+      setChats((prev) => prev.map((c) => (c.id === id ? { ...c, ...updated } : c)))
     } catch (err) {
       showError(err.message)
+    }
+  }
+
+  const handleTogglePin = async (chat) => {
+    try {
+      const updated = await api.updateChat(chat.id, { pinned: !chat.pinned })
+      setChats((prev) => prev.map((c) => (c.id === chat.id ? { ...c, ...updated } : c)))
+    } catch (err) {
+      showError(err.message)
+    }
+  }
+
+  const handleImport = async (data) => {
+    try {
+      const chat = await api.importChat(data)
+      setQuery('')
+      await refreshChats()
+      setActiveId(chat.id)
+      setSidebarOpen(false)
+    } catch (err) {
+      showError(err.message)
+      throw err
     }
   }
 
@@ -120,7 +161,7 @@ export default function App() {
     refreshChats()
   }
 
-  const handleSend = (text) => send(text, { model: modelByChat[activeId] || '' })
+  const handleSend = (text) => send(text, { model: currentModel })
 
   const handleChatSettings = async (patch, clear = []) => {
     try {
@@ -136,6 +177,49 @@ export default function App() {
       return null
     }
   }
+
+  const handleAutoTitle = async () => {
+    setBusy(true)
+    try {
+      const updated = await api.autoTitle(activeId)
+      setChats((prev) => prev.map((c) => (c.id === activeId ? { ...c, ...updated } : c)))
+    } catch (err) {
+      showError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleToggleIncognito = async () => {
+    setBusy(true)
+    try {
+      const updated = await api.updateChat(activeId, { incognito: !incognito })
+      setChats((prev) => prev.map((c) => (c.id === activeId ? { ...c, ...updated } : c)))
+    } catch (err) {
+      showError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Keyboard shortcuts: Ctrl+K search, Ctrl+Shift+O new chat, Esc stop.
+  useEffect(() => {
+    const onKey = (e) => {
+      const key = e.key.toLowerCase()
+      if ((e.ctrlKey || e.metaKey) && key === 'k') {
+        e.preventDefault()
+        setSidebarOpen(true)
+        setTimeout(() => document.getElementById('chat-search')?.focus(), 50)
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && key === 'o') {
+        e.preventDefault()
+        handleNew()
+      } else if (e.key === 'Escape' && streaming) {
+        stop()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [streaming, stop, handleNew])
 
   if (fatal) {
     return (
@@ -156,15 +240,16 @@ export default function App() {
 
   if (!ready) return null
 
-  const activeChat = chats.find((c) => c.id === activeId)
-
   return (
     <div className="flex h-full">
       <Sidebar
         chats={chats}
         activeId={activeId}
         open={sidebarOpen}
+        query={query}
+        onQueryChange={setQuery}
         onNew={handleNew}
+        onNewIncognito={handleNewIncognito}
         onSelect={(id) => {
           setActiveId(id)
           setSidebarOpen(false)
@@ -172,6 +257,8 @@ export default function App() {
         }}
         onRename={handleRename}
         onDelete={handleDelete}
+        onTogglePin={handleTogglePin}
+        onImport={handleImport}
         onOpenSettings={() => setSettingsOpen(true)}
         onClose={() => setSidebarOpen(false)}
       />
@@ -182,11 +269,12 @@ export default function App() {
           messages={messages}
           streaming={streaming}
           error={error}
+          stopReason={stopReason}
           onDismissError={clearError}
           onSend={handleSend}
           onStop={stop}
           onOpenSidebar={() => setSidebarOpen(true)}
-          model={modelByChat[activeId] || settings.model}
+          model={currentModel}
           onModelChange={(m) => {
             setModelByChat((prev) => ({ ...prev, [activeId]: m }))
             handleChatSettings({ model: m })
@@ -194,6 +282,14 @@ export default function App() {
           chatSettings={chatSettings[activeId] || {}}
           onSaveChatSettings={handleChatSettings}
           defaultModel={settings.model}
+          onRegenerate={(id) => regenerate(id, currentModel)}
+          onEdit={(id, content) => editAndResend(id, content, currentModel)}
+          onDelete={removeMessage}
+          onContinue={() => continueReply(currentModel)}
+          onAutoTitle={handleAutoTitle}
+          onToggleIncognito={handleToggleIncognito}
+          incognito={incognito}
+          busy={busy || streaming}
         />
       </main>
 
