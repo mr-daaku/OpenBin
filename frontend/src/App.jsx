@@ -17,6 +17,8 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [ready, setReady] = useState(false)
   const [fatal, setFatal] = useState(null)
+  const [modelByChat, setModelByChat] = useState({})
+  const [chatSettings, setChatSettings] = useState({})
 
   const refreshChats = useCallback(
     () => api.listChats().then((rows) => setChats(rows)),
@@ -27,6 +29,18 @@ export default function App() {
     activeId,
     refreshChats,
   )
+
+  // Per-chat overrides (model, temperature, ...) travel with the chat row.
+  useEffect(() => {
+    if (activeId == null) return
+    const chat = chats.find((c) => c.id === activeId)
+    if (!chat) return
+    setChatSettings((prev) => ({ ...prev, [activeId]: chat.settings || {} }))
+    setModelByChat((prev) =>
+      prev[activeId] ? prev : { ...prev, [activeId]: chat.settings?.model || settings?.model || '' },
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, chats])
 
   // First launch: load settings + chats, open Settings when no API key yet.
   useEffect(() => {
@@ -99,10 +113,28 @@ export default function App() {
     }
   }
 
-  const handleSettingsSaved = (saved) => {
+  const handleSettingsSaved = (saved, opts = {}) => {
     setSettings(saved)
     applyTheme(saved.theme)
-    setSettingsOpen(false)
+    if (!opts.keepOpen) setSettingsOpen(false)
+    refreshChats()
+  }
+
+  const handleSend = (text) => send(text, { model: modelByChat[activeId] || '' })
+
+  const handleChatSettings = async (patch, clear = []) => {
+    try {
+      const updated = await api.saveChatSettings(activeId, { ...patch, clear })
+      setChatSettings((prev) => ({ ...prev, [activeId]: updated.settings }))
+      setChats((prev) => prev.map((c) => (c.id === activeId ? { ...c, ...updated } : c)))
+      if (patch.model !== undefined || clear.includes('model')) {
+        setModelByChat((prev) => ({ ...prev, [activeId]: patch.model || settings.model }))
+      }
+      return updated.settings
+    } catch (err) {
+      showError(err.message)
+      return null
+    }
   }
 
   if (fatal) {
@@ -151,9 +183,17 @@ export default function App() {
           streaming={streaming}
           error={error}
           onDismissError={clearError}
-          onSend={send}
+          onSend={handleSend}
           onStop={stop}
           onOpenSidebar={() => setSidebarOpen(true)}
+          model={modelByChat[activeId] || settings.model}
+          onModelChange={(m) => {
+            setModelByChat((prev) => ({ ...prev, [activeId]: m }))
+            handleChatSettings({ model: m })
+          }}
+          chatSettings={chatSettings[activeId] || {}}
+          onSaveChatSettings={handleChatSettings}
+          defaultModel={settings.model}
         />
       </main>
 

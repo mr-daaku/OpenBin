@@ -110,10 +110,19 @@ export default function Message({ message, streaming }) {
   }
 
   const showTyping = streaming && !message.content
+  const modelBadge = message.model ? (
+    <span
+      className="mb-1 inline-block max-w-full truncate rounded-md bg-neutral-100 px-1.5 py-0.5 font-mono text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
+      title={message.model}
+    >
+      {message.model}
+    </span>
+  ) : null
 
   return (
     <div className="group flex items-start gap-2">
       <div className="min-w-0 flex-1">
+        {modelBadge}
         {showTyping ? (
           <div className="flex items-center gap-1.5 py-2">
             <span className="typing-dot h-2 w-2 rounded-full bg-neutral-400 dark:bg-neutral-500" />

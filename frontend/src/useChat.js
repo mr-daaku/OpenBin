@@ -39,7 +39,7 @@ export default function useChat(chatId, onChatChanged) {
   const clearError = useCallback(() => setError(null), [])
 
   const send = useCallback(
-    async (raw) => {
+    async (raw, opts = {}) => {
       const content = String(raw || '').trim()
       if (!content || streaming || chatId == null) return
 
@@ -47,8 +47,8 @@ export default function useChat(chatId, onChatChanged) {
       setError(null)
       setMessages((prev) => [
         ...prev,
-        { id: `local-${session}`, role: 'user', content },
-        { id: `stream-${session}`, role: 'assistant', content: '', local: true },
+        { id: `local-${session}`, role: 'user', content, model: opts.model || null },
+        { id: `stream-${session}`, role: 'assistant', content: '', model: opts.model || null, local: true },
       ])
       setStreaming(true)
       const controller = new AbortController()
@@ -59,7 +59,7 @@ export default function useChat(chatId, onChatChanged) {
         const res = await fetch(`/api/chats/${chatId}/stream`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content }),
+          body: JSON.stringify({ content, model: opts.model || null }),
           signal: controller.signal,
         })
 
