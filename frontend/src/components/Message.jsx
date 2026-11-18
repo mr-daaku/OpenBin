@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
-import { Check, Copy, FileText, Pencil, RefreshCw, Trash2, X } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Check, Copy, ExternalLink, FileText, Pencil, RefreshCw, Trash2, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
+import { extractArtifacts } from '../artifacts.js'
 
 // Only a handful of languages are registered to keep the bundle small.
 import javascript from 'highlight.js/lib/languages/javascript'
@@ -157,6 +158,7 @@ export default function Message({
   onRegenerate,
   onEdit,
   onDelete,
+  onOpenArtifact,
 }) {
   const [copied, setCopied] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -252,7 +254,7 @@ export default function Message({
       <span className="typing-dot h-2 w-2 rounded-full bg-neutral-400 dark:bg-neutral-500" />
     </div>
   ) : (
-    <MarkdownBody content={message.content} />
+    <MarkdownBody content={message.content} onOpenArtifact={onOpenArtifact} />
   )
 
   return (
@@ -288,8 +290,31 @@ export default function Message({
   )
 }
 
-function MarkdownBody({ content }) {
-  const math = useMathPlugins(MATH_RE.test(content))
+function ArtifactChips({ artifacts, onOpen }) {
+  if (!artifacts.length) return null
+  return (
+    <div className="mb-2 flex flex-wrap gap-2">
+      {artifacts.map((a, i) => (
+        <button
+          key={`${a.start}-${i}`}
+          onClick={() => onOpen(a)}
+          className="flex max-w-[280px] items-center gap-2 rounded-xl border border-neutral-300 bg-neutral-50 px-3 py-2 text-left transition hover:border-neutral-500 dark:border-neutral-700 dark:bg-neutral-800 dark:hover:border-neutral-500"
+          title={`Open ${a.title}`}
+        >
+          <span className="shrink-0 rounded bg-neutral-900 px-1.5 py-0.5 font-mono text-[10px] uppercase text-white dark:bg-white dark:text-neutral-900">
+            {a.type}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-xs font-medium">{a.title}</span>
+          <ExternalLink size={13} className="shrink-0 opacity-50" />
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function MarkdownBody({ content, onOpenArtifact }) {
+  const { text, artifacts } = useMemo(() => extractArtifacts(content), [content])
+  const math = useMathPlugins(MATH_RE.test(text))
   const plugins = [remarkGfm]
   const rehype = [[rehypeHighlight, { languages: LANGUAGES, detect: false }]]
   if (math) {
@@ -298,9 +323,15 @@ function MarkdownBody({ content }) {
   }
   return (
     <div className="md">
-      <ReactMarkdown remarkPlugins={plugins} rehypePlugins={rehype} components={mdComponents}>
-        {content}
-      </ReactMarkdown>
+      <ArtifactChips artifacts={artifacts} onOpen={onOpenArtifact} />
+      {text && (
+        <ReactMarkdown remarkPlugins={plugins} rehypePlugins={rehype} components={mdComponents}>
+          {text}
+        </ReactMarkdown>
+      )}
+      {!text && artifacts.length > 0 && (
+        <p className="text-xs text-neutral-400">Artifact ready - open the card above to view it.</p>
+      )}
     </div>
   )
 }

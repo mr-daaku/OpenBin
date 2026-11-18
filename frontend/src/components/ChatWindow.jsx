@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, Download, Loader2, Menu, MoreHorizontal, Search, Shield, Sparkles, SlidersHorizontal, TriangleAlert, X } from 'lucide-react'
 import ChatInput, { estimateTokens } from './ChatInput.jsx'
 import Message from './Message.jsx'
+import ArtifactPanel from './ArtifactPanel.jsx'
 import { api } from '../api.js'
 
 function ModelPicker({ model, onPick, defaultModel }) {
@@ -358,6 +359,12 @@ export default function ChatWindow({
   const scrollRef = useRef(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [draft, setDraft] = useState('')
+  const [artifact, setArtifact] = useState(null)
+
+  // Close the panel when the chat changes.
+  useEffect(() => {
+    setArtifact(null)
+  }, [chatId])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -373,7 +380,8 @@ export default function ChatWindow({
     !!last.content
 
   return (
-    <div className="flex h-full min-w-0 flex-col">
+    <div className="flex h-full min-w-0">
+      <div className="flex h-full min-w-0 flex-1 flex-col">
       <header className="relative flex items-center gap-3 border-b border-neutral-200 px-4 py-3 dark:border-neutral-800 md:px-6">
         <button
           onClick={onOpenSidebar}
@@ -456,6 +464,7 @@ export default function ChatWindow({
                 onRegenerate={onRegenerate}
                 onEdit={onEdit}
                 onDelete={onDelete}
+                onOpenArtifact={setArtifact}
               />
             ))
           )}
@@ -483,6 +492,9 @@ export default function ChatWindow({
           </div>
         </div>
       </div>
+      </div>
+
+      {artifact && <ArtifactPanel artifact={artifact} onClose={() => setArtifact(null)} />}
     </div>
   )
 }
