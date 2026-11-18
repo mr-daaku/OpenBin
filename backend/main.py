@@ -7,8 +7,11 @@ Only ever bind to 127.0.0.1 (the Vite dev server proxies /api here).
 """
 
 import base64
+import html as html_module
 import json
+import re
 import sqlite3
+import urllib.parse
 from pathlib import Path
 from uuid import uuid4
 
@@ -69,6 +72,11 @@ Do NOT use artifacts for short answers, small snippets or normal conversation.
 ## Safety
 - Don't help with malware, hacking other people's accounts, scams, or anything that seriously harms others. Refuse briefly and politely, and offer a safe alternative if there is one."""
 
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+
 DEFAULTS = {
     "api_key": "",
     "base_url": "https://integrate.api.nvidia.com/v1",
@@ -107,6 +115,7 @@ def init_db() -> None:
             "ALTER TABLE chats ADD COLUMN system_prompt TEXT",
             "ALTER TABLE chats ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE chats ADD COLUMN incognito INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE messages ADD COLUMN sources TEXT",
         ):
             try:
                 conn.execute(stmt)
@@ -739,15 +748,27 @@ def list_messages(chat_id: int):
         if not exists:
             return JSONResponse({"error": "Chat not found"}, status_code=404)
         rows = conn.execute(
-            "SELECT id, chat_id, role, content, model, created_at FROM messages "
+            "SELECT id, chat_id, role, content, model, sources, created_at FROM messages "
             "WHERE chat_id = ? ORDER BY id",
             (chat_id,),
         ).fetchall()
         files = files_for_messages(conn, [r["id"] for r in rows])
-        return [
-            {**dict(r), "files": [file_out(f) for f in files.get(r["id"], [])]}
-            for r in rows
-        ]
+        out = []
+        for r in rows:
+            sources = None
+            if r["sources"]:
+                try:
+                    sources = json.loads(r["sources"])
+                except ValueError:
+                    sources = None
+            out.append(
+                {
+                    **{k: r[k] for k in ("id", "chat_id", "role", "content", "model", "created_at")},
+                    "sources": sources,
+                    "files": [file_out(f) for f in files.get(r["id"], [])],
+                }
+            )
+        return out
     finally:
         conn.close()
 
@@ -1041,6 +1062,281 @@ def files_for_messages(conn: sqlite3.Connection, message_ids: list) -> dict:
     return out
 
 
+# ---------------------------------------------------------------- web search
+
+SEARCH_INTRO = (
+    "Live web search results for the user's latest message (numbers are citation "
+    "keys - cite them inline as [1], [2] when you use them):\n"
+)
+
+RESEARCH_INTRO = (
+    "\n\nYou are writing a deep research report. Use the search results above as "
+    "your source material: organize the answer under clear markdown headings, cite "
+    "sources inline as [1], [2], and note anything the results do not cover."
+)
+
+SEARCH_TIMEOUT = 60  # seconds - a sleeping Gradio Space can take a while to wake
+SEARCH_GAP = 1.5  # polite pause between deep-research sub-queries (rate limits)
+
+_gradio_clients: dict = {}  # space name -> reused gradio_client.Client
+
+
+class SearchError(Exception):
+    """A search provider refused or misbehaved - the message is user-facing."""
+
+
+def search_config(st: dict | None = None) -> dict:
+    st = st or load_settings()
+    return {
+        "provider": (st.get("search_provider") or "gradio").strip(),
+        "space": (st.get("search_space") or "").strip(),
+        "key": st.get("search_key") or "",
+        "tavily": st.get("search_tavily_key") or "",
+        "url": (st.get("search_custom_url") or "").strip().rstrip("/"),
+        "custom_key": st.get("search_custom_key") or "",
+    }
+
+
+def configured_providers(cfg: dict) -> list[tuple[str, dict]]:
+    """Providers that actually have credentials, active one first (fallback order)."""
+    found: list[tuple[str, dict]] = []
+    if cfg["space"]:
+        found.append(("gradio", {"space": cfg["space"], "key": cfg["key"]}))
+    if cfg["tavily"]:
+        found.append(("tavily", {"key": cfg["tavily"]}))
+    if cfg["url"]:
+        found.append(("custom", {"url": cfg["url"], "key": cfg["custom_key"]}))
+    active = cfg["provider"]
+    found.sort(key=lambda item: 0 if item[0] == active else 1)
+    return found
+
+
+def parse_results(data, limit: int) -> list[dict]:
+    """Normalize {"results": [...]} / bare list / JSON-string provider output."""
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except ValueError:
+            raise SearchError(f"Search returned non-JSON output: {data[:200]}")
+    if isinstance(data, dict):
+        if data.get("error"):
+            raise SearchError(str(data["error"]))
+        items = data.get("results")
+        if items is None:
+            raise SearchError(
+                "Search response has no 'results' field: " + json.dumps(data, ensure_ascii=False)[:200]
+            )
+    else:
+        items = data
+    if not isinstance(items, list):
+        raise SearchError(f"Search results are not a list ({type(items).__name__})")
+    out = []
+    for item in items[:limit]:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url.startswith("http"):
+            continue
+        title = str(item.get("title") or "").strip() or url
+        snippet = str(item.get("snippet") or item.get("content") or "").strip()
+        out.append({"title": title[:200], "url": url, "snippet": snippet[:400]})
+    return out
+
+
+def _gradio_call(space: str, key: str, query: str, limit: int) -> list[dict]:
+    """Blocking - always run through asyncio.to_thread under SEARCH_TIMEOUT."""
+    from gradio_client import Client  # lazy: only paid for when gradio search runs
+
+    client = _gradio_clients.get(space)
+    if client is None:
+        client = Client(space, verbose=False)
+        _gradio_clients[space] = client
+    try:
+        data = client.predict(query, key, limit, api_name="/search")
+    except Exception:
+        _gradio_clients.pop(space, None)  # stale session - rebuild next time
+        raise
+    return parse_results(data, limit)
+
+
+async def _tavily_call(key: str, query: str, limit: int) -> list[dict]:
+    import httpx
+
+    async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT, follow_redirects=True) as client:
+        res = await client.post(
+            "https://api.tavily.com/search",
+            json={"api_key": key, "query": query, "max_results": limit},
+            headers={"User-Agent": USER_AGENT},
+        )
+    if res.status_code >= 400:
+        raise SearchError(f"Tavily HTTP {res.status_code}: {res.text[:200]}")
+    try:
+        data = res.json()
+    except ValueError:
+        raise SearchError(f"Tavily returned non-JSON: {res.text[:200]}")
+    return parse_results(data, limit)
+
+
+async def _custom_call(url: str, key: str, query: str, limit: int) -> list[dict]:
+    import httpx
+
+    headers = {"User-Agent": USER_AGENT}
+    if key:
+        headers["x-api-key"] = key
+    async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT, follow_redirects=True) as client:
+        res = await client.get(f"{url}/search", params={"q": query, "limit": limit}, headers=headers)
+    if res.status_code >= 400:
+        raise SearchError(f"Search URL HTTP {res.status_code}: {res.text[:200]}")
+    try:
+        data = res.json()
+    except ValueError:
+        raise SearchError(f"Search URL returned non-JSON: {res.text[:200]}")
+    return parse_results(data, limit)
+
+
+async def call_provider(name: str, pcfg: dict, query: str, limit: int) -> list[dict]:
+    if name == "gradio":
+        return await asyncio.wait_for(
+            asyncio.to_thread(_gradio_call, pcfg["space"], pcfg["key"], query, limit),
+            timeout=SEARCH_TIMEOUT,
+        )
+    if name == "tavily":
+        return await asyncio.wait_for(_tavily_call(pcfg["key"], query, limit), timeout=SEARCH_TIMEOUT)
+    if name == "custom":
+        return await asyncio.wait_for(
+            _custom_call(pcfg["url"], pcfg["key"], query, limit), timeout=SEARCH_TIMEOUT
+        )
+    raise SearchError(f"Unknown search provider: {name}")
+
+
+def search_error_text(exc: Exception) -> str:
+    if isinstance(exc, TimeoutError):
+        return f"timed out after {SEARCH_TIMEOUT}s"
+    if isinstance(exc, SearchError):
+        return str(exc)
+    return exact_error(exc) or exc.__class__.__name__
+
+
+async def search_any(
+    query: str, limit: int = 5, cfg: dict | None = None, chain: list | None = None
+) -> tuple[list[dict], list[str]]:
+    """Try providers in order (active first). Returns (results, errors) and
+    never raises - an error/timeout/empty reply just moves to the next one."""
+    cfg = cfg or search_config()
+    chain = configured_providers(cfg) if chain is None else chain
+    if not chain:
+        return [], ["no search provider configured - add one in Settings"]
+    errors: list[str] = []
+    for name, pcfg in chain:
+        try:
+            results = await call_provider(name, pcfg, query, limit)
+        except Exception as exc:  # noqa: BLE001 - fallback is the whole point
+            errors.append(f"{name}: {search_error_text(exc)}")
+            continue
+        if results:
+            return results, errors
+        errors.append(f"{name}: no results")
+    return [], errors
+
+
+def format_results(results: list[dict]) -> str:
+    lines = []
+    for i, r in enumerate(results, start=1):
+        lines.append(f"[{i}] {r['title']}\nURL: {r['url']}\n{r['snippet']}")
+    return "\n\n".join(lines)
+
+
+def inject_search_context(messages: list, results: list[dict], query: str, research: bool = False) -> None:
+    """Append numbered results to the last user message (most compatible
+    place - every OpenAI-style API accepts it)."""
+    body = SEARCH_INTRO + format_results(results) + f"\n\nSearch query: {query}"
+    if research:
+        body += RESEARCH_INTRO
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            if isinstance(m.get("content"), list):
+                m["content"] = [
+                    *m["content"],
+                    {"type": "text", "text": body},
+                ]
+            else:
+                m["content"] = f"{m.get('content', '')}\n\n{body}"
+            return
+    messages.append({"role": "user", "content": body})
+
+
+async def propose_queries(query: str, run: dict) -> list[str]:
+    """Ask the model for 3-5 focused search sub-queries (research mode)."""
+    if not run["api_key"]:
+        return []
+    client = AsyncOpenAI(api_key=run["api_key"], base_url=run["base_url"])
+    try:
+        res = await client.chat.completions.create(
+            model=run["model"],
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You plan web searches. Given a research request, reply with "
+                    "3-5 short focused search queries, one per line, no numbering, no commentary.",
+                },
+                {"role": "user", "content": query[:800]},
+            ],
+            max_tokens=400,
+            temperature=0.3,
+        )
+    except Exception:  # noqa: BLE001 - fall back to the raw query
+        return []
+    text = (res.choices[0].message.content or "").strip()
+    queries = [ln.strip(" -*\t") for ln in text.splitlines() if ln.strip()]
+    return queries[:5]
+
+
+async def run_search(messages: list, run: dict, mode: str, query: str):
+    """Async generator: yields SSE dicts, then injects context into messages.
+
+    mode 'search'  -> one search on the user's message.
+    mode 'research' -> model proposes sub-queries, each one searched.
+    """
+    try:
+        if mode == "research":
+            yield {"type": "status", "text": "Planning searches..."}
+            subs = await propose_queries(query, run)
+            subs = [q for q in subs if q][:4] or [query]
+            seen: set = set()
+            gathered: list = []
+            for q in subs:
+                yield {"type": "status", "text": f"Searching: {q}"}
+                for r in await search_web(q, 5):
+                    if r["url"] in seen:
+                        continue
+                    seen.add(r["url"])
+                    gathered.append(r)
+            results = gathered[:14]
+        else:
+            yield {"type": "status", "text": "Searching the web..."}
+            results = await search_web(query, 6)
+
+        if not results:
+            yield {"type": "search", "query": query, "results": [], "note": "no results"}
+            yield {
+                "type": "notice",
+                "text": "Web search returned no results - the model will answer from its own knowledge.",
+            }
+            return
+
+        yield {"type": "search", "query": query, "results": results}
+        inject_search_context(messages, results, query)
+    except Exception as exc:  # noqa: BLE001 - never break the chat over search
+        yield {"type": "notice", "text": f"Web search failed: {friendly_error(exc)}"}
+
+
+@app.get("/api/search")
+async def search_endpoint(q: str, limit: int = 6):
+    """Direct search (used by tests and the Research preview)."""
+    results = await search_web(q[:400], max(1, min(10, limit)))
+    return {"query": q, "results": results}
+
+
 # ---------------------------------------------------------------- streaming
 
 def strip_images(messages: list) -> list:
@@ -1072,14 +1368,17 @@ async def generate(
     target_id: int | None = None,
     prefix: str = "",
     persist: bool = True,
+    sources: list | None = None,
 ):
     """Yield SSE events, always persisting whatever the model produced.
 
     target_id set  -> append to that existing message (Continue).
     persist False  -> incognito chat, nothing is written.
+    sources        -> web search results to store with the reply.
     """
     new_text = ""
     saved = False
+    sources_json = json.dumps(sources, ensure_ascii=False) if sources else None
 
     def save_partial() -> None:
         nonlocal saved
@@ -1096,8 +1395,9 @@ async def generate(
                 )
             else:
                 conn.execute(
-                    "INSERT INTO messages (chat_id, role, content, model) VALUES (?, 'assistant', ?, ?)",
-                    (chat_id, full, run["model"]),
+                    "INSERT INTO messages (chat_id, role, content, model, sources) "
+                    "VALUES (?, 'assistant', ?, ?, ?)",
+                    (chat_id, full, run["model"], sources_json),
                 )
             conn.commit()
         finally:
@@ -1150,6 +1450,7 @@ class MessageIn(BaseModel):
     continue_last: bool = False
     history: list[dict] | None = None
     files: list[int] = []
+    search: str | None = None  # None | 'web' | 'research'
 
 
 def build_content(content: str, rows: list[sqlite3.Row], allow_images: bool = True):
@@ -1312,8 +1613,29 @@ async def stream_message(chat_id: int, body: MessageIn):
             return JSONResponse({"error": "Nothing to continue."}, status_code=400)
         messages.append({"role": "user", "content": CONTINUE_NUDGE})
 
+    async def pipeline():
+        # Web search / deep research run first and inject their results into
+        # the same `messages` list the model call then consumes.
+        collected: list = []
+        if body.search in ("web", "research"):
+            query = (body.content or "").strip()
+            if not query:
+                for m in reversed(messages):
+                    if m.get("role") == "user" and isinstance(m.get("content"), str):
+                        query = m["content"]
+                        break
+            query = query[:600] or "the user's question"
+            async for event in run_search(messages, run, body.search, query):
+                if event.get("type") == "search" and event.get("results"):
+                    collected = event["results"]
+                yield sse(event)
+        async for event in generate(
+            run, messages, chat_id, target_id, prefix, persist, collected or None
+        ):
+            yield event
+
     return StreamingResponse(
-        generate(run, messages, chat_id, target_id, prefix, persist),
+        pipeline(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
