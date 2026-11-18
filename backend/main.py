@@ -6,18 +6,21 @@ Run from the backend/ folder:
 Only ever bind to 127.0.0.1 (the Vite dev server proxies /api here).
 """
 
+import base64
 import json
 import sqlite3
 from pathlib import Path
+from uuid import uuid4
 
 import openai
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
+UPLOAD_DIR = DATA_DIR / "uploads"
 DB_PATH = DATA_DIR / "openbin.db"
 SCHEMA_SQL = (BASE_DIR / "schema.sql").read_text(encoding="utf-8")
 
@@ -122,6 +125,11 @@ def init_db() -> None:
                 "VALUES (?, 'nvidia', ?, ?, 1)",
                 ("NVIDIA NIM", stored.get("base_url", DEFAULTS["base_url"]), stored.get("api_key", "")),
             )
+        # One-time sweep: uploads that were never sent to a message (the user
+        # picked a file then abandoned the chat) are old enough to drop.
+        conn.execute(
+            "DELETE FROM files WHERE message_id IS NULL AND created_at < datetime('now', '-1 day')"
+        )
         conn.commit()
     finally:
         conn.close()
@@ -712,10 +720,12 @@ def update_chat(chat_id: int, body: ChatUpdateIn):
 def delete_chat(chat_id: int):
     conn = connect()
     try:
-        cur = conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
-        conn.commit()
-        if cur.rowcount == 0:
+        exists = conn.execute("SELECT id FROM chats WHERE id = ?", (chat_id,)).fetchone()
+        if exists is None:
             return JSONResponse({"error": "Chat not found"}, status_code=404)
+        cleanup_chat_files(chat_id, conn)
+        with conn:
+            conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
         return {"deleted": chat_id}
     finally:
         conn.close()
@@ -733,7 +743,11 @@ def list_messages(chat_id: int):
             "WHERE chat_id = ? ORDER BY id",
             (chat_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        files = files_for_messages(conn, [r["id"] for r in rows])
+        return [
+            {**dict(r), "files": [file_out(f) for f in files.get(r["id"], [])]}
+            for r in rows
+        ]
     finally:
         conn.close()
 
@@ -751,10 +765,29 @@ def edit_message(message_id: int, body: MessageEditIn):
             return JSONResponse({"error": "Message cannot be empty"}, status_code=400)
         with conn:
             conn.execute("UPDATE messages SET content = ? WHERE id = ?", (content, message_id))
+            dropped = conn.execute(
+                "SELECT id FROM messages WHERE chat_id = ? AND id > ?",
+                (row["chat_id"], message_id),
+            ).fetchall()
             removed = conn.execute(
                 "DELETE FROM messages WHERE chat_id = ? AND id > ?",
                 (row["chat_id"], message_id),
             ).rowcount
+            if dropped:
+                marks = ",".join("?" * len(dropped))
+                drows = conn.execute(
+                    f"SELECT path FROM files WHERE message_id IN ({marks})",
+                    [d["id"] for d in dropped],
+                ).fetchall()
+                conn.execute(
+                    f"DELETE FROM files WHERE message_id IN ({marks})",
+                    [d["id"] for d in dropped],
+                )
+                for f in drows:
+                    try:
+                        Path(f["path"]).unlink(missing_ok=True)
+                    except OSError:
+                        pass
         fresh = conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
         return {**dict(fresh), "removed_after": removed}
     finally:
@@ -765,10 +798,19 @@ def edit_message(message_id: int, body: MessageEditIn):
 def delete_message(message_id: int):
     conn = connect()
     try:
-        cur = conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
-        conn.commit()
-        if cur.rowcount == 0:
+        cur = conn.execute("SELECT chat_id FROM messages WHERE id = ?", (message_id,))
+        row = cur.fetchone()
+        if row is None:
             return JSONResponse({"error": "Message not found"}, status_code=404)
+        files = conn.execute("SELECT path FROM files WHERE message_id = ?", (message_id,)).fetchall()
+        with conn:
+            conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+            conn.execute("DELETE FROM files WHERE message_id = ?", (message_id,))
+        for f in files:
+            try:
+                Path(f["path"]).unlink(missing_ok=True)
+            except OSError:
+                pass
         return {"deleted": message_id}
     finally:
         conn.close()
@@ -853,7 +895,175 @@ def import_chat(body: ImportIn):
         conn.close()
 
 
+# ---------------------------------------------------------------- files api
+
+MAX_UPLOAD = 25 * 1024 * 1024  # 25 MB
+TEXT_KINDS = {
+    "text", "text/plain", "text/markdown", "text/csv", "text/html", "text/xml",
+    "application/json", "application/xml", "application/javascript",
+    "application/x-sh", "application/yaml", "application/toml",
+}
+TEXT_EXTS = {
+    ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".xml", ".html", ".htm",
+    ".css", ".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".c", ".cpp", ".h",
+    ".cs", ".go", ".rs", ".rb", ".php", ".sh", ".bat", ".ps1", ".sql", ".yaml",
+    ".yml", ".toml", ".ini", ".cfg", ".log", ".srt", ".vue", ".svelte",
+}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+MAX_TEXT_CHARS = 60000  # cap injected file text so history stays sane
+
+
+def classify(name: str, mime: str) -> str:
+    ext = Path(name).suffix.lower()
+    mime = (mime or "").lower()
+    if ext in IMAGE_EXTS or mime.startswith("image/"):
+        return "image"
+    if ext == ".pdf" or mime == "application/pdf":
+        return "pdf"
+    if ext in TEXT_EXTS or mime in TEXT_KINDS or mime.startswith("text/"):
+        return "text"
+    return "file"
+
+
+def extract_text(path: Path, kind: str, name: str) -> str:
+    """Pull plain text out of an uploaded file (empty for images/binaries)."""
+    try:
+        if kind == "pdf":
+            from pypdf import PdfReader  # lazy: only paid for when a PDF arrives
+            reader = PdfReader(str(path))
+            parts = []
+            total = 0
+            for page in reader.pages:
+                t = page.extract_text() or ""
+                parts.append(t)
+                total += len(t)
+                if total >= MAX_TEXT_CHARS:
+                    break
+            return "\n".join(parts)[:MAX_TEXT_CHARS]
+        if kind == "text":
+            return path.read_text(encoding="utf-8", errors="replace")[:MAX_TEXT_CHARS]
+    except Exception:  # noqa: BLE001 - unreadable file just gets no text
+        return ""
+    return ""
+
+
+def file_out(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "mime": row["mime"],
+        "kind": row["kind"],
+        "size": row["size"],
+        "url": f"/api/files/{row['id']}",
+    }
+
+
+@app.post("/api/files")
+async def upload_file(file: UploadFile = File(...), chat_id: int | None = None):
+    raw = await file.read()
+    if len(raw) > MAX_UPLOAD:
+        return JSONResponse({"error": "File is larger than 25 MB."}, status_code=413)
+    if not raw:
+        return JSONResponse({"error": "That file is empty."}, status_code=400)
+    name = (file.filename or "file").strip()[:120]
+    kind = classify(name, file.content_type or "")
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    stored = UPLOAD_DIR / f"{uuid4().hex}{Path(name).suffix.lower()[:10]}"
+    stored.write_bytes(raw)
+    extracted = extract_text(stored, kind, name)
+    conn = connect()
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO files (chat_id, name, mime, kind, size, path, extracted) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (chat_id, name, file.content_type or "", kind, len(raw), str(stored), extracted),
+            )
+        row = conn.execute("SELECT * FROM files WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return {**file_out(row), "extracted": extracted}
+    finally:
+        conn.close()
+
+
+@app.get("/api/files/{file_id}")
+def serve_file(file_id: int, download: int = 0):
+    conn = connect()
+    try:
+        row = conn.execute("SELECT * FROM files WHERE id = ?", (file_id,)).fetchone()
+    finally:
+        conn.close()
+    if row is None or not Path(row["path"]).exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    headers = {}
+    if download:
+        safe = row["name"].replace('"', "")
+        headers["Content-Disposition"] = f'attachment; filename="{safe}"'
+    return FileResponse(row["path"], media_type=row["mime"] or "application/octet-stream", headers=headers)
+
+
+def cleanup_chat_files(chat_id: int, conn: sqlite3.Connection) -> None:
+    """Delete the on-disk files a chat owns (called before the rows vanish)."""
+    rows = conn.execute("SELECT path FROM files WHERE chat_id = ?", (chat_id,)).fetchall()
+    with conn:
+        conn.execute("DELETE FROM files WHERE chat_id = ?", (chat_id,))
+    for r in rows:
+        try:
+            Path(r["path"]).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def link_files(conn: sqlite3.Connection, ids: list, chat_id: int, message_id: int) -> list[sqlite3.Row]:
+    """Attach freshly uploaded files to the user message just inserted."""
+    if not ids:
+        return []
+    ids = [int(i) for i in ids][:10]
+    marks = ",".join("?" * len(ids))
+    conn.execute(
+        f"UPDATE files SET chat_id = ?, message_id = ? WHERE id IN ({marks}) AND message_id IS NULL",
+        (chat_id, message_id, *ids),
+    )
+    return conn.execute(
+        f"SELECT * FROM files WHERE id IN ({marks}) AND message_id = ?", (*ids, message_id)
+    ).fetchall()
+
+
+def files_for_messages(conn: sqlite3.Connection, message_ids: list) -> dict:
+    if not message_ids:
+        return {}
+    marks = ",".join("?" * len(message_ids))
+    out: dict = {}
+    rows = conn.execute(
+        f"SELECT * FROM files WHERE message_id IN ({marks}) ORDER BY id", message_ids
+    ).fetchall()
+    for r in rows:
+        out.setdefault(r["message_id"], []).append(r)
+    return out
+
+
 # ---------------------------------------------------------------- streaming
+
+def strip_images(messages: list) -> list:
+    """Text-only copy of the payload (fallback when the model has no vision)."""
+    out = []
+    for m in messages:
+        if isinstance(m.get("content"), list):
+            text = " ".join(
+                p.get("text", "") for p in m["content"] if p.get("type") == "text"
+            )
+            out.append({**m, "content": text})
+        else:
+            out.append(m)
+    return out
+
+
+def has_images(messages: list) -> bool:
+    return any(
+        isinstance(m.get("content"), list)
+        and any(p.get("type") == "image_url" for p in m["content"])
+        for m in messages
+    )
+
 
 async def generate(
     run: dict,
@@ -908,7 +1118,14 @@ async def generate(
     if run.get("top_p") is not None:
         kwargs["top_p"] = run["top_p"]
     try:
-        stream = await client.chat.completions.create(**kwargs)
+        try:
+            stream = await client.chat.completions.create(**kwargs)
+        except openai.BadRequestError:
+            if not has_images(messages):
+                raise
+            # Model/provider has no vision - resend as text only.
+            kwargs["messages"] = strip_images(messages)
+            stream = await client.chat.completions.create(**kwargs)
         async for chunk in stream:
             choices = getattr(chunk, "choices", None)
             if not choices:
@@ -932,6 +1149,37 @@ class MessageIn(BaseModel):
     truncate_from: int | None = None
     continue_last: bool = False
     history: list[dict] | None = None
+    files: list[int] = []
+
+
+def build_content(content: str, rows: list[sqlite3.Row], allow_images: bool = True):
+    """Message payload for the model: text + extracted file text + image parts."""
+    notes = []
+    parts = []
+    for r in rows:
+        if r["kind"] == "image":
+            if allow_images and r["mime"].startswith("image/"):
+                try:
+                    data = Path(r["path"]).read_bytes()
+                except OSError:
+                    continue
+                if len(data) <= 8 * 1024 * 1024:
+                    b64 = base64.b64encode(data).decode()
+                    parts.append(
+                        {"type": "image_url", "image_url": {"url": f"data:{r['mime']};base64,{b64}"}}
+                    )
+                    continue
+            notes.append(f"[image attached: {r['name']}]")
+        elif r["kind"] in ("text", "pdf") and r["extracted"].strip():
+            notes.append(f"[file: {r['name']}]\n{r['extracted'].strip()}")
+        else:
+            notes.append(f"[file attached: {r['name']} - content not readable as text]")
+    text = content.strip()
+    if notes:
+        text = (text + "\n\n" if text else "") + "\n\n".join(notes)
+    if parts:
+        return [{"type": "text", "text": text or "Please look at the attached image(s)."}, *parts]
+    return text
 
 
 CONTINUE_NUDGE = (
@@ -971,6 +1219,16 @@ async def stream_message(chat_id: int, body: MessageIn):
         persist = not bool(chat["incognito"])
         limit = max(1, int(st["history_limit"]))
 
+        # Rows for files uploaded with this message (works for incognito too,
+        # where nothing gets linked to a message).
+        file_rows: list[sqlite3.Row] = []
+        if body.files:
+            marks = ",".join("?" * len(body.files[:10]))
+            file_rows = conn.execute(
+                f"SELECT * FROM files WHERE id IN ({marks})",
+                [int(i) for i in body.files[:10]],
+            ).fetchall()
+
         if body.truncate_from is not None:
             # Edit & resend / regenerate: drop the messages being replaced.
             conn.execute(
@@ -996,14 +1254,15 @@ async def stream_message(chat_id: int, body: MessageIn):
             previous = conn.execute(
                 "SELECT COUNT(*) AS n FROM messages WHERE chat_id = ?", (chat_id,)
             ).fetchone()["n"]
-            conn.execute(
+            cur = conn.execute(
                 "INSERT INTO messages (chat_id, role, content, model) VALUES (?, 'user', ?, ?)",
                 (chat_id, body.content, run["model"]),
             )
+            link_files(conn, body.files, chat_id, cur.lastrowid)
             if previous == 0:
                 conn.execute(
                     "UPDATE chats SET title = ? WHERE id = ?",
-                    (body.content.strip()[:40] or "New Chat", chat_id),
+                    (body.content.strip()[:40] or (file_rows[0]["name"] if file_rows else "New Chat"), chat_id),
                 )
         conn.commit()
 
@@ -1015,14 +1274,30 @@ async def stream_message(chat_id: int, body: MessageIn):
                 for m in body.history
                 if isinstance(m, dict)
                 and m.get("role") in ("user", "assistant")
-                and isinstance(m.get("content"), str)
+                and isinstance(m.get("content"), (str, list))
             ]
+            if body.append and file_rows and history:
+                # Incognito: the client history has no file text - add it here.
+                history[-1]["content"] = build_content(
+                    history[-1]["content"] if isinstance(history[-1]["content"], str) else "",
+                    file_rows,
+                )
         elif persist:
             rows = conn.execute(
-                "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
+                "SELECT id, role, content FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
                 (chat_id, limit),
             ).fetchall()
-            history = [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+            past = files_for_messages(conn, [r["id"] for r in rows])
+            history = []
+            for i, r in enumerate(reversed(rows)):
+                newest = i == len(rows) - 1
+                fs = file_rows if (body.append and newest) else past.get(r["id"], [])
+                history.append(
+                    {
+                        "role": r["role"],
+                        "content": build_content(r["content"], fs, allow_images=newest),
+                    }
+                )
         else:
             history = [{"role": "user", "content": body.content}] if body.append else []
     finally:

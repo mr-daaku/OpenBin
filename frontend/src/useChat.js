@@ -161,12 +161,19 @@ export default function useChat(chatId, onChatChanged, options = {}) {
   const send = useCallback(
     async (raw, opts = {}) => {
       const content = String(raw || '').trim()
-      if (!content || streaming || chatId == null) return
+      const files = Array.isArray(opts.files) ? opts.files : []
+      if ((!content && files.length === 0) || streaming || chatId == null) return
 
       const session = ++sessionRef.current
       const model = opts.model || ''
       const list = messagesRef.current
-      const userMsg = { id: `local-${session}`, role: 'user', content, model: model || null }
+      const userMsg = {
+        id: `local-${session}`,
+        role: 'user',
+        content,
+        model: model || null,
+        files: files.map((f) => ({ ...f })),
+      }
       const botId = `stream-${session}`
 
       targetRef.current = { id: botId, create: true }
@@ -177,6 +184,7 @@ export default function useChat(chatId, onChatChanged, options = {}) {
           content,
           model: model || null,
           append: true,
+          files: files.map((f) => f.id),
           history: isIncognito() ? [...list, userMsg].map(pick) : null,
         },
         session,

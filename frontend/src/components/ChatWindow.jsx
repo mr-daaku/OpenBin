@@ -332,6 +332,7 @@ function ChatMenu({ title, messages, incognito, busy, onAutoTitle, onToggleIncog
 
 export default function ChatWindow({
   title,
+  chatId,
   messages,
   streaming,
   error,
@@ -473,7 +474,7 @@ export default function ChatWindow({
               </button>
             </div>
           )}
-          <ChatInput streaming={streaming} onSend={onSend} onStop={onStop} onDraftChange={setDraft} />
+          <ChatInput streaming={streaming} onSend={onSend} onStop={onStop} onDraftChange={setDraft} chatId={chatId} />
           <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-neutral-400">
             <span className="truncate">Local app · your chats stay on this computer</span>
             <span className="shrink-0" title="Approximate token count of your draft">

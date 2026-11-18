@@ -19,6 +19,21 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER,
+    message_id INTEGER,
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'file',
+    size INTEGER NOT NULL DEFAULT 0,
+    path TEXT NOT NULL,
+    extracted TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_files_message_id ON files (message_id);
+
 CREATE TABLE IF NOT EXISTS providers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,

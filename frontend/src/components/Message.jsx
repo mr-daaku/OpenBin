@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Check, Copy, Pencil, RefreshCw, Trash2, X } from 'lucide-react'
+import { Check, Copy, FileText, Pencil, RefreshCw, Trash2, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -121,6 +121,35 @@ function ActionButton({ onClick, label, children, danger }) {
   )
 }
 
+function Attachments({ files }) {
+  if (!files?.length) return null
+  return (
+    <div className="mb-1.5 flex flex-wrap gap-2">
+      {files.map((f) =>
+        f.kind === 'image' && f.url ? (
+          <a key={f.id} href={f.url} target="_blank" rel="noreferrer">
+            <img
+              src={f.url}
+              alt={f.name}
+              className="max-h-40 max-w-[240px] rounded-xl border border-neutral-200 object-cover dark:border-neutral-700"
+            />
+          </a>
+        ) : (
+          <a
+            key={f.id}
+            href={`${f.url}?download=1`}
+            className="flex max-w-[240px] items-center gap-1.5 rounded-xl border border-neutral-200 bg-neutral-100 px-2.5 py-1.5 text-xs hover:bg-neutral-200 dark:border-neutral-700 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+            title={`Download ${f.name}`}
+          >
+            <FileText size={14} className="shrink-0 opacity-60" />
+            <span className="truncate">{f.name}</span>
+          </a>
+        ),
+      )}
+    </div>
+  )
+}
+
 export default function Message({
   message,
   streaming,
@@ -175,6 +204,7 @@ export default function Message({
           </div>
         )}
         <div className="max-w-[85%] rounded-3xl bg-neutral-200 px-4 py-2.5 text-[15px] leading-7 whitespace-pre-wrap break-words dark:bg-neutral-800">
+          <Attachments files={message.files} />
           {message.content}
         </div>
       </div>

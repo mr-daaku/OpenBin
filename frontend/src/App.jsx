@@ -161,7 +161,7 @@ export default function App() {
     refreshChats()
   }
 
-  const handleSend = (text) => send(text, { model: currentModel })
+  const handleSend = (text, files) => send(text, { model: currentModel, files })
 
   const handleChatSettings = async (patch, clear = []) => {
     try {
@@ -266,6 +266,7 @@ export default function App() {
       <main className="flex min-w-0 flex-1 flex-col">
         <ChatWindow
           title={activeChat?.title || 'OpenBin'}
+          chatId={activeId}
           messages={messages}
           streaming={streaming}
           error={error}

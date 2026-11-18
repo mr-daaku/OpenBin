@@ -44,4 +44,20 @@ export const api = {
 
   editMessage: (id, content) => request(`/api/messages/${id}`, { method: 'PATCH', body: JSON.stringify({ content }) }),
   deleteMessage: (id) => request(`/api/messages/${id}`, { method: 'DELETE' }),
+
+  uploadFile: async (file, chatId) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const url = chatId != null ? `/api/files?chat_id=${chatId}` : '/api/files'
+    const res = await fetch(url, { method: 'POST', body: fd })
+    const text = await res.text()
+    let data = null
+    try {
+      data = text ? JSON.parse(text) : null
+    } catch {
+      /* not JSON */
+    }
+    if (!res.ok) throw new Error(data?.error || `Upload failed (${res.status})`)
+    return data
+  },
 }
