@@ -86,6 +86,12 @@ function parseHash() {
 function AppearanceTab({ settings, onSave, onChange }) {
   const [theme, setTheme] = useState(settings.theme || 'dark')
   useEffect(() => setTheme(settings.theme || 'dark'), [settings.theme])
+  
+  const handleThemeChange = (t) => {
+    setTheme(t)
+    onChange?.({ theme: t })  // Update parent state immediately
+  }
+
   const dirty = theme !== (settings.theme || 'dark')
   return (
     <TabPanel dirty={dirty} onSave={() => onSave({ theme })}>
@@ -96,7 +102,7 @@ function AppearanceTab({ settings, onSave, onChange }) {
             {['dark', 'light', 'system'].map((t) => (
               <button
                 key={t}
-                onClick={() => setTheme(t)}
+                onClick={() => handleThemeChange(t)}
                 className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition ${
                   theme === t
                     ? 'bg-neutral-900 text-white border-neutral-900 dark:bg-white dark:text-neutral-900 dark:border-white'
@@ -1006,7 +1012,7 @@ const TAB_COMPONENTS = {
 // Main Settings Page
 // ============================================================
 
-export default function SettingsPage({ onClose }) {
+export default function SettingsPage({ onClose, onSaved }) {
   const [settings, setSettings] = useState(null)
   const [loading, setLoading] = useState(true)
   const [hash, setHash] = useState(parseHash())
@@ -1035,6 +1041,7 @@ export default function SettingsPage({ onClose }) {
     const next = { ...settings, ...patch }
     await api.saveSettings(next)
     setSettings(next)
+    onSaved?.(next)
   }
 
   const handleChange = (patch) => setSettings((s) => ({ ...s, ...patch }))

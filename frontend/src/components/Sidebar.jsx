@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { EyeOff, FileUp, FolderKanban, Pin, PinOff, Pencil, Plus, Search, Trash2, X, Check } from 'lucide-react'
 import { api } from '../api.js'
 
