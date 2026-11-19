@@ -1928,6 +1928,14 @@ ROUTER_RETRY_TOKENS = 2000  # reasoning models burn tokens before any content
 ROUTER_TIMEOUT = 30
 TOOL_RESULT_CHARS = 12000  # cap on what a single tool hands back to the model
 
+# Deep Research constants
+RESEARCH_MAX_ROUNDS = 3          # max search+fetch rounds
+RESEARCH_MAX_PAGES = 8           # max pages to fetch per round
+RESEARCH_MAX_TOTAL_PAGES = 20    # max pages total
+RESEARCH_MAX_TIME = 180          # max seconds for entire research
+RESEARCH_GAP = 1.0               # pause between searches
+RESEARCH_FETCH_CHARS = 8000      # chars per fetched page
+
 TOOL_SEARCH_INTRO = (
     "Web search results (the numbers are citation keys - cite them inline as "
     "[1], [2] when you use them):\n"
