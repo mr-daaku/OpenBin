@@ -62,6 +62,15 @@ export const api = {
   exportMemories: () => request('/api/memory/export', { method: 'POST' }),
   importMemories: (memories) => request('/api/memory/import', { method: 'POST', body: JSON.stringify({ memories }) }),
 
+  // Projects
+  listProjects: () => request('/api/projects'),
+  createProject: (data) => request('/api/projects', { method: 'POST', body: JSON.stringify(data) }),
+  updateProject: (id, data) => request(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteProject: (id) => request(`/api/projects/${id}`, { method: 'DELETE' }),
+  listProjectFiles: (projectId) => request(`/api/projects/${projectId}/files`),
+  uploadProjectFile: (projectId, data) => request(`/api/projects/${projectId}/files`, { method: 'POST', body: JSON.stringify(data) }),
+  deleteProjectFile: (projectId, fileId) => request(`/api/projects/${projectId}/files/${fileId}`, { method: 'DELETE' }),
+
   uploadFile: async (file, chatId) => {
     const fd = new FormData()
     fd.append('file', file)

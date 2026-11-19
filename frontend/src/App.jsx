@@ -30,6 +30,8 @@ export default function App() {
       return 'auto'
     }
   })
+  // Active project for the sidebar
+  const [activeProjectId, setActiveProjectId] = useState(null)
 
   const changeSearchMode = useCallback((mode) => {
     setSearchMode(mode)
@@ -116,7 +118,7 @@ export default function App() {
 
   const handleNew = useCallback(async () => {
     try {
-      const chat = await api.createChat()
+      const chat = await api.createChat({ project_id: activeProjectId })
       setChats((prev) => [chat, ...prev])
       setActiveId(chat.id)
       setSidebarOpen(false)
@@ -124,11 +126,11 @@ export default function App() {
     } catch (err) {
       showError(err.message)
     }
-  }, [clearError, showError])
+  }, [activeProjectId, clearError, showError])
 
   const handleNewIncognito = useCallback(async () => {
     try {
-      const chat = await api.createChat()
+      const chat = await api.createChat({ project_id: activeProjectId })
       const marked = await api.updateChat(chat.id, { incognito: true })
       setChats((prev) => [marked, ...prev])
       setActiveId(marked.id)
@@ -137,7 +139,7 @@ export default function App() {
     } catch (err) {
       showError(err.message)
     }
-  }, [clearError, showError])
+  }, [activeProjectId, clearError, showError])
 
   const handleRename = async (id, title) => {
     try {
@@ -156,6 +158,21 @@ export default function App() {
       showError(err.message)
     }
   }
+
+  const handleNewProject = useCallback(async () => {
+    // Handled by sidebar's form
+  }, [])
+
+  const handleSelectProject = useCallback((projectId) => {
+    setActiveProjectId(projectId)
+    // Create a new chat in this project
+    api.createChat({ project_id: projectId }).then((chat) => {
+      setChats((prev) => [chat, ...prev])
+      setActiveId(chat.id)
+      setSidebarOpen(false)
+      clearError()
+    }).catch(showError)
+  }, [clearError, showError])
 
   const handleImport = async (data) => {
     try {
@@ -296,6 +313,9 @@ export default function App() {
         onTogglePin={handleTogglePin}
         onImport={handleImport}
         onClose={() => setSidebarOpen(false)}
+        onNewProject={handleNewProject}
+        onSelectProject={handleSelectProject}
+        activeProjectId={activeProjectId}
       />
 
       <main className="flex min-w-0 flex-1 flex-col">
