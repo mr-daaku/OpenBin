@@ -1,139 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, Download, Loader2, Menu, MoreHorizontal, Search, Shield, Sparkles, SlidersHorizontal, TriangleAlert, X } from 'lucide-react'
+import { Download, Menu, MoreHorizontal, Shield, Sparkles, SlidersHorizontal, TriangleAlert, X } from 'lucide-react'
 import ChatInput, { estimateTokens } from './ChatInput.jsx'
 import Message from './Message.jsx'
 import ArtifactPanel from './ArtifactPanel.jsx'
-import { api } from '../api.js'
-
-function ModelPicker({ model, onPick, defaultModel }) {
-  const [open, setOpen] = useState(false)
-  const [models, setModels] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
-  const [query, setQuery] = useState('')
-  const [manual, setManual] = useState('')
-  const wrapRef = useRef(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [open])
-
-  const load = async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await api.getModels()
-      setModels(data.models || [])
-      setError(data.error)
-    } catch (err) {
-      setModels([])
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const toggle = () => {
-    const next = !open
-    setOpen(next)
-    if (next && models.length === 0 && !loading) load()
-  }
-
-  const q = query.trim().toLowerCase()
-  const visible = models.filter((m) => !q || m.toLowerCase().includes(q))
-
-  const choose = (name) => {
-    onPick(name)
-    setOpen(false)
-  }
-
-  return (
-    <div className="relative" ref={wrapRef}>
-      <button
-        onClick={toggle}
-        className="flex max-w-[40vw] items-center gap-1.5 rounded-lg border border-neutral-200 px-2.5 py-1.5 text-xs font-medium hover:bg-neutral-100 md:max-w-[26vw] dark:border-neutral-700 dark:hover:bg-neutral-800"
-        title={model}
-      >
-        <span className="truncate font-mono">{model || 'model'}</span>
-        <ChevronDown size={13} className="shrink-0 opacity-60" />
-      </button>
-
-      {open && (
-        <div className="absolute right-0 top-full z-40 mt-2 w-80 rounded-xl border border-neutral-200 bg-white p-2 shadow-2xl dark:border-neutral-700 dark:bg-neutral-900">
-          <div className="relative mb-2">
-            <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
-            <input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search models…"
-              className="w-full rounded-lg border border-neutral-300 bg-transparent py-1.5 pl-8 pr-2 text-xs outline-none focus:border-neutral-500 dark:border-neutral-700"
-            />
-          </div>
-
-          <div className="scroll-slim max-h-56 overflow-y-auto">
-            {loading && (
-              <p className="flex items-center gap-2 px-2 py-3 text-xs text-neutral-500">
-                <Loader2 size={13} className="animate-spin" /> Loading models…
-              </p>
-            )}
-            {!loading && error && <p className="px-2 py-3 text-xs text-amber-600 dark:text-amber-400">{error}</p>}
-            {!loading && !error && visible.length === 0 && (
-              <p className="px-2 py-3 text-xs text-neutral-400">No models match.</p>
-            )}
-            {visible.map((name) => (
-              <button
-                key={name}
-                onClick={() => choose(name)}
-                className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left font-mono text-xs ${
-                  name === model ? 'bg-neutral-100 dark:bg-neutral-800' : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
-                }`}
-              >
-                <span className="min-w-0 flex-1 truncate">{name}</span>
-                {name === model && <span className="text-green-600 dark:text-green-400">✓</span>}
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-2 border-t border-neutral-200 pt-2 dark:border-neutral-800">
-            <form
-              onSubmit={(e) => {
-                e.preventDefault()
-                const v = manual.trim()
-                if (v) choose(v)
-              }}
-              className="flex gap-1.5"
-            >
-              <input
-                value={manual}
-                onChange={(e) => setManual(e.target.value)}
-                placeholder="Type a model id…"
-                className="min-w-0 flex-1 rounded-lg border border-neutral-300 bg-transparent px-2 py-1.5 font-mono text-xs outline-none focus:border-neutral-500 dark:border-neutral-700"
-              />
-              <button
-                type="submit"
-                className="rounded-lg bg-neutral-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-neutral-700 dark:bg-white dark:text-neutral-900"
-              >
-                Use
-              </button>
-            </form>
-            <button
-              onClick={() => choose(defaultModel)}
-              className="mt-1.5 w-full rounded-lg px-2 py-1.5 text-left text-[11px] text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-            >
-              Reset to default ({defaultModel})
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
 
 function ChatSettingsPanel({ settings, defaultModel, onSave, onClose }) {
   const [temperature, setTemperature] = useState(settings.temperature ?? 0.7)
@@ -395,7 +264,6 @@ export default function ChatWindow({
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
 
         <div className="flex shrink-0 items-center gap-1.5">
-          <ModelPicker model={model} onPick={onModelChange} defaultModel={defaultModel} />
           <div className="relative">
             <button
               onClick={() => setSettingsOpen((v) => !v)}
@@ -493,6 +361,9 @@ export default function ChatWindow({
             chatId={chatId}
             searchMode={searchMode}
             onSearchModeChange={onSearchModeChange}
+            model={model}
+            onModelChange={onModelChange}
+            defaultModel={defaultModel}
           />
           <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-neutral-400">
             <span className="truncate">Local app · your chats stay on this computer</span>

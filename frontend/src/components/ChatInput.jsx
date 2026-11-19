@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, Brain, ChevronDown, FileText, Globe, GlobeOff, Loader2, Paperclip, Square, Telescope, X } from 'lucide-react'
 import { api } from '../api.js'
+import ModelPicker from './ModelPicker.jsx'
 
 // The four web-search modes. Auto is the default: the model (or the router
 // fallback when it has no tool support) decides whether a search is needed.
@@ -30,6 +31,9 @@ export default function ChatInput({
   chatId,
   searchMode = DEFAULT_SEARCH_MODE,
   onSearchModeChange,
+  model,
+  onModelChange,
+  defaultModel,
 }) {
   const [value, setValue] = useState('')
   const [files, setFiles] = useState([]) // {key, id, name, kind, url, uploading}
@@ -221,6 +225,7 @@ export default function ChatInput({
             </div>
           )}
         </div>
+        <ModelPicker model={model} onPick={onModelChange} defaultModel={defaultModel} />
         <textarea
           ref={ref}
           rows={1}
@@ -229,7 +234,7 @@ export default function ChatInput({
           onKeyDown={onKeyDown}
           onPaste={onPaste}
           placeholder="Message OpenBin"
-          className="scroll-slim max-h-[200px] min-h-[40px] flex-1 resize-none bg-transparent px-2 py-2 text-[15px] leading-6 outline-none placeholder:text-neutral-400 dark:placeholder:text-neutral-500"
+          className="scroll-slim max-h-[200px] min-h-[40px] min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-[15px] leading-6 outline-none placeholder:text-neutral-400 dark:placeholder:text-neutral-500"
         />
         {streaming ? (
           <button
