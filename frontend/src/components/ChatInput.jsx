@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUp, Brain, ChevronDown, FileText, Globe, GlobeOff, Loader2, Paperclip, Square, Telescope, X } from 'lucide-react'
+import { ArrowUp, Brain, ChevronDown, FileText, Globe, GlobeOff, Loader2, Paperclip, Square, Telescope, X, AlertTriangle } from 'lucide-react'
 import { api } from '../api.js'
 import ModelPicker from './ModelPicker.jsx'
 
@@ -32,16 +32,21 @@ export default function ChatInput({
   searchMode = DEFAULT_SEARCH_MODE,
   onSearchModeChange,
   model,
+  modelCaps = {},
   onModelChange,
   defaultModel,
 }) {
   const [value, setValue] = useState('')
   const [files, setFiles] = useState([]) // {key, id, name, kind, url, uploading}
   const [modeOpen, setModeOpen] = useState(false)
+  const [visionWarn, setVisionWarn] = useState(false)
   const ref = useRef(null)
   const fileRef = useRef(null)
   const modeRef = useRef(null)
   const keyRef = useRef(0)
+
+  const hasVision = !!modelCaps.vision
+  const isImageGenOnly = !!modelCaps.image_gen && !modelCaps.vision && !modelCaps.tools
 
   // Auto-grow (up to a comfortable cap) and keep focus after each send.
   useEffect(() => {
@@ -67,12 +72,45 @@ export default function ChatInput({
     onDraftChange?.(e.target.value)
   }
 
+  // Resize image in browser to max 1568px longest side, JPEG 0.85 quality
+  const resizeImage = (file) => {
+    return new Promise((resolve) => {
+      if (!file.type.startsWith('image/')) { resolve(file); return }
+      const img = new Image()
+      img.onload = () => {
+        const MAX = 1568
+        let { width, height } = img
+        if (width > MAX || height > MAX) {
+          if (width > height) { height = Math.round(height * MAX / width); width = MAX }
+          else { width = Math.round(width * MAX / height); height = MAX }
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(img, 0, 0, width, height)
+        canvas.toBlob((blob) => {
+          resolve(new File([blob], file.name, { type: 'image/jpeg', lastModified: Date.now() }))
+        }, 'image/jpeg', 0.85)
+      }
+      img.src = URL.createObjectURL(file)
+    })
+  }
+
   const addFiles = async (list) => {
     for (const file of Array.from(list || [])) {
+      const isImage = file.type.startsWith('image/')
+      // Vision gating: block image if model has no vision (and is not image-gen only)
+      if (isImage && !hasVision && !isImageGenOnly) {
+        setVisionWarn(true)
+        setTimeout(() => setVisionWarn(false), 4000)
+        continue
+      }
+      const processedFile = isImage ? await resizeImage(file) : file
       const key = ++keyRef.current
-      setFiles((prev) => [...prev, { key, id: null, name: file.name, kind: 'file', url: null, uploading: true }])
+      setFiles((prev) => [...prev, { key, id: null, name: processedFile.name, kind: isImage ? 'image' : 'file', url: null, uploading: true }])
       try {
-        const up = await api.uploadFile(file, chatId)
+        const up = await api.uploadFile(processedFile, chatId)
         setFiles((prev) =>
           prev.map((f) => (f.key === key ? { ...f, id: up.id, name: up.name, kind: up.kind, url: up.url, uploading: false } : f)),
         )
@@ -121,6 +159,12 @@ export default function ChatInput({
 
   return (
     <div className="rounded-3xl border border-neutral-300 bg-white p-2 shadow-sm transition focus-within:border-neutral-500 dark:border-neutral-700 dark:bg-neutral-900 dark:focus-within:border-neutral-500">
+      {visionWarn && (
+        <div className="mb-2 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300" role="alert">
+          <AlertTriangle size={14} className="shrink-0" />
+          <span>This model doesn't support images. Switch to a vision model or remove the image.</span>
+        </div>
+      )}
       {files.length > 0 && (
         <div className="flex flex-wrap gap-2 px-2 pt-1 pb-2">
           {files.map((f) => (

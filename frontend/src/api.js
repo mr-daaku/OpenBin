@@ -32,6 +32,9 @@ export const api = {
   testProvider: (id, data) => request(`/api/providers/${id}/test`, { method: 'POST', body: JSON.stringify(data) }),
   togglePinned: (id, model) => request(`/api/providers/${id}/pinned`, { method: 'POST', body: JSON.stringify({ model }) }),
 
+  updateModelCaps: (id, model, caps) => request(`/api/providers/${id}/caps`, { method: 'POST', body: JSON.stringify({ model, ...caps }) }),
+  resetModelCaps: (id, model) => request(`/api/providers/${id}/caps`, { method: 'POST', body: JSON.stringify({ model, reset: true }) }),
+
   listChats: (q) => request(q ? `/api/chats?q=${encodeURIComponent(q)}` : '/api/chats'),
   createChat: () => request('/api/chats', { method: 'POST' }),
   renameChat: (id, title) => request(`/api/chats/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),

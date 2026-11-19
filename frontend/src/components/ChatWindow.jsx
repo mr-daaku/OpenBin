@@ -212,6 +212,7 @@ export default function ChatWindow({
   onStop,
   onOpenSidebar,
   model,
+  modelCaps,
   onModelChange,
   chatSettings,
   onSaveChatSettings,
@@ -362,6 +363,7 @@ export default function ChatWindow({
             searchMode={searchMode}
             onSearchModeChange={onSearchModeChange}
             model={model}
+            modelCaps={modelCaps}
             onModelChange={onModelChange}
             defaultModel={defaultModel}
           />

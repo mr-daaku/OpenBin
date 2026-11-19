@@ -52,3 +52,17 @@ CREATE TABLE IF NOT EXISTS model_tools (
     supports INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Per-provider, per-model capability overrides.
+-- source: 'auto' (from provider metadata / name heuristic) | 'manual' (user toggle)
+CREATE TABLE IF NOT EXISTS model_caps (
+    provider_id INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    vision INTEGER NOT NULL DEFAULT 0,
+    image_gen INTEGER NOT NULL DEFAULT 0,
+    tools INTEGER NOT NULL DEFAULT 1,
+    reasoning INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'auto',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (provider_id, model)
+);

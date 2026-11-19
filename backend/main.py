@@ -144,6 +144,7 @@ def init_db() -> None:
             "ALTER TABLE chats ADD COLUMN incognito INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE messages ADD COLUMN sources TEXT",
             "ALTER TABLE messages ADD COLUMN steps TEXT",
+            "ALTER TABLE model_caps ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))",
         ):
             try:
                 conn.execute(stmt)
@@ -609,6 +610,40 @@ def toggle_pinned(provider_id: int, body: PinnedIn):
         conn.close()
 
 
+class CapsIn(BaseModel):
+    model: str
+    vision: int | None = None
+    image_gen: int | None = None
+    tools: int | None = None
+    reasoning: int | None = None
+    reset: bool = False
+
+
+@app.post("/api/providers/{provider_id}/caps")
+def update_model_caps(provider_id: int, body: CapsIn):
+    conn = connect()
+    try:
+        row = conn.execute("SELECT * FROM providers WHERE id = ?", (provider_id,)).fetchone()
+        if row is None:
+            return JSONResponse({"error": "Provider not found"}, status_code=404)
+        model = body.model.strip()
+        if not model:
+            return JSONResponse({"error": "Model required"}, status_code=400)
+        if body.reset:
+            reset_model_caps(provider_id, model)
+            return {"model": model, "reset": True}
+        caps = {
+            "vision": body.vision if body.vision is not None else 0,
+            "image_gen": body.image_gen if body.image_gen is not None else 0,
+            "tools": body.tools if body.tools is not None else 1,
+            "reasoning": body.reasoning if body.reasoning is not None else 0,
+        }
+        set_model_caps(provider_id, model, caps)
+        return {"model": model, **caps, "source": "manual"}
+    finally:
+        conn.close()
+
+
 async def fetch_models(base_url: str, api_key: str) -> dict:
     if not api_key:
         return {"models": [], "error": "No API key saved yet. Add it for this provider."}
@@ -616,9 +651,101 @@ async def fetch_models(base_url: str, api_key: str) -> dict:
     try:
         res = await client.models.list()
         names = sorted(m.id for m in res.data if getattr(m, "id", None))
-        return {"models": names, "error": None}
+        # Try to get metadata from provider if available (OpenRouter-style)
+        meta = {}
+        try:
+            if hasattr(res, "data"):
+                for m in res.data:
+                    mid = getattr(m, "id", None)
+                    if not mid:
+                        continue
+                    caps = {}
+                    # OpenRouter returns supported_parameters, input_modalities, output_modalities
+                    if hasattr(m, "supported_parameters"):
+                        caps["tools"] = 1
+                    if hasattr(m, "input_modalities"):
+                        caps["vision"] = 1 if "image" in (m.input_modalities or []) else 0
+                    if hasattr(m, "output_modalities"):
+                        caps["image_gen"] = 1 if "image" in (m.output_modalities or []) else 0
+                    if caps:
+                        meta[mid] = caps
+        except Exception:
+            pass
+        return {"models": names, "error": None, "meta": meta}
     except Exception as exc:  # noqa: BLE001 - the reason is shown in the UI
         return {"models": [], "error": friendly_error(exc)}
+
+
+def infer_caps_from_name(model: str) -> dict:
+    """Heuristic capability detection from model name."""
+    m = model.lower()
+    caps = {"vision": 0, "image_gen": 0, "tools": 1, "reasoning": 0}
+    # Vision models
+    if any(k in m for k in ("vision", "vl", "llava", "pixtral", "4o", "gemini", "claude-3", "gpt-4o", "gpt-4-turbo", "qwen-vl", "yi-vl", "deepseek-vl", "llama-3.2-vision")):
+        caps["vision"] = 1
+    # Image generation models
+    if any(k in m for k in ("flux", "stable-diffusion", "sdxl", "dall-e", "imagen", "midjourney", "kandinsky", "playground")):
+        caps["image_gen"] = 1
+        caps["tools"] = 0
+        caps["vision"] = 0
+    # Reasoning models
+    if any(k in m for k in ("r1", "reasoning", "thinking", "step-5", "o1", "o3")):
+        caps["reasoning"] = 1
+    return caps
+
+
+def get_model_caps(provider_id: int, model: str) -> dict:
+    """Get capabilities for a model: manual override > provider metadata > name heuristic."""
+    conn = connect()
+    try:
+        row = conn.execute(
+            "SELECT vision, image_gen, tools, reasoning, source FROM model_caps WHERE provider_id = ? AND model = ?",
+            (provider_id, model),
+        ).fetchone()
+        if row:
+            return {
+                "vision": row["vision"],
+                "image_gen": row["image_gen"],
+                "tools": row["tools"],
+                "reasoning": row["reasoning"],
+                "source": row["source"],
+            }
+    finally:
+        conn.close()
+    # No manual override - will be filled by provider metadata or heuristic later
+    return {"vision": 0, "image_gen": 0, "tools": 1, "reasoning": 0, "source": "auto"}
+
+
+def set_model_caps(provider_id: int, model: str, caps: dict) -> None:
+    """Save manual capability override."""
+    conn = connect()
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO model_caps (provider_id, model, vision, image_gen, tools, reasoning, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'manual') "
+                "ON CONFLICT(provider_id, model) DO UPDATE SET "
+                "vision = excluded.vision, image_gen = excluded.image_gen, "
+                "tools = excluded.tools, reasoning = excluded.reasoning, "
+                "source = 'manual', updated_at = datetime('now')",
+                (provider_id, model, caps.get("vision", 0), caps.get("image_gen", 0),
+                 caps.get("tools", 1), caps.get("reasoning", 0)),
+            )
+    finally:
+        conn.close()
+
+
+def reset_model_caps(provider_id: int, model: str) -> None:
+    """Remove manual override, fall back to auto."""
+    conn = connect()
+    try:
+        with conn:
+            conn.execute(
+                "DELETE FROM model_caps WHERE provider_id = ? AND model = ?",
+                (provider_id, model),
+            )
+    finally:
+        conn.close()
 
 
 @app.get("/api/providers/{provider_id}/models")
@@ -628,7 +755,24 @@ async def provider_models(provider_id: int):
     if provider is None:
         return {"models": [], "error": "Provider not found."}
     base_url, key = provider_creds(provider, st)
-    return await fetch_models(base_url, key)
+    data = await fetch_models(base_url, key)
+    # Enrich with capabilities
+    models = data.get("models", [])
+    meta = data.get("meta", {})
+    enriched = []
+    for m in models:
+        caps = get_model_caps(provider_id, m)
+        # Merge provider metadata if available
+        if m in meta:
+            pm = meta[m]
+            if caps["source"] == "auto":
+                caps.update({k: v for k, v in pm.items() if k in caps})
+        # Fallback to name heuristic if still auto
+        if caps["source"] == "auto":
+            heuristic = infer_caps_from_name(m)
+            caps.update(heuristic)
+        enriched.append({"id": m, **caps})
+    return {"models": enriched, "error": data.get("error")}
 
 
 @app.post("/api/providers/{provider_id}/test")
@@ -2032,11 +2176,25 @@ async def generate(
                 stream = await client.chat.completions.create(**kwargs)
                 async for event in pump(stream, box_text, box_calls):
                     yield event
-            except openai.BadRequestError:
+            except openai.BadRequestError as exc:
                 if with_tools and not new_text:
                     # The endpoint refused `tools` for this model before
                     # anything was shown - switch to the router path.
                     raise ToolsUnsupported() from None
+                # Check if this is a vision-related error
+                err_text = str(exc).lower()
+                if not new_text and has_images(messages) and (
+                    "image" in err_text or "vision" in err_text or "modality" in err_text or "unsupported" in err_text
+                ):
+                    # Provider rejected images - mark model as no vision and show clear message
+                    provider = load_provider()
+                    if provider and run.get("model"):
+                        set_model_caps(provider["id"], run["model"], {"vision": 0, "image_gen": 0, "tools": 1, "reasoning": 0})
+                    yield sse({
+                        "type": "error",
+                        "error": "This model does not support image inputs. The model has been marked as non-vision. Please switch to a vision-capable model or remove images from the chat.",
+                    })
+                    return
                 if new_text or not has_images(messages):
                     raise
                 # Model/provider has no vision - resend as text only.
@@ -2162,12 +2320,15 @@ class MessageIn(BaseModel):
     tz: str | None = None  # the browser's IANA timezone, for "today"/"latest"
 
 
-def build_content(content: str, rows: list[sqlite3.Row], allow_images: bool = True):
-    """Message payload for the model: text + extracted file text + image parts."""
+def build_content(content: str, rows: list[sqlite3.Row], allow_images: bool = True, has_vision: bool = True):
+    """Message payload for the model: text + extracted file text + image parts.
+    If has_vision is False and images are present, a warning note is added."""
     notes = []
     parts = []
+    has_image_attachments = False
     for r in rows:
         if r["kind"] == "image":
+            has_image_attachments = True
             if allow_images and r["mime"].startswith("image/"):
                 try:
                     data = Path(r["path"]).read_bytes()
@@ -2185,6 +2346,9 @@ def build_content(content: str, rows: list[sqlite3.Row], allow_images: bool = Tr
         else:
             notes.append(f"[file attached: {r['name']} - content not readable as text]")
     text = content.strip()
+    # If model has no vision but images were attached, add a clear warning
+    if has_image_attachments and not has_vision:
+        notes.insert(0, "⚠️ This model does not support image inputs. Images were sent but the model cannot see them. Please switch to a vision-capable model for image analysis.")
     if notes:
         text = (text + "\n\n" if text else "") + "\n\n".join(notes)
     if parts:
@@ -2240,6 +2404,13 @@ async def stream_message(chat_id: int, body: MessageIn):
 
         st = load_settings()
         run = build_run(chat, body.model, st)
+        # Fetch vision capability for this model
+        run["has_vision"] = True
+        if run.get("base_url") and run.get("model"):
+            provider = load_provider()
+            if provider:
+                caps = get_model_caps(provider["id"], run["model"])
+                run["has_vision"] = bool(caps.get("vision"))
         persist = not bool(chat["incognito"])
         limit = max(1, int(st["history_limit"]))
 
@@ -2305,6 +2476,7 @@ async def stream_message(chat_id: int, body: MessageIn):
                 history[-1]["content"] = build_content(
                     history[-1]["content"] if isinstance(history[-1]["content"], str) else "",
                     file_rows,
+                    has_vision=run.get("has_vision", True),
                 )
         elif persist:
             rows = conn.execute(
@@ -2319,7 +2491,7 @@ async def stream_message(chat_id: int, body: MessageIn):
                 history.append(
                     {
                         "role": r["role"],
-                        "content": build_content(r["content"], fs, allow_images=newest),
+                        "content": build_content(r["content"], fs, allow_images=newest, has_vision=run.get("has_vision", True)),
                     }
                 )
         else:

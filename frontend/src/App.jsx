@@ -18,6 +18,7 @@ export default function App() {
   const [ready, setReady] = useState(false)
   const [fatal, setFatal] = useState(null)
   const [modelByChat, setModelByChat] = useState({})
+  const [modelCaps, setModelCaps] = useState({}) // modelId -> {vision, image_gen, tools, reasoning}
   const [chatSettings, setChatSettings] = useState({})
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
@@ -295,9 +296,22 @@ export default function App() {
           onStop={stop}
           onOpenSidebar={() => setSidebarOpen(true)}
           model={currentModel}
-          onModelChange={(m) => {
+          modelCaps={modelCaps[currentModel] || {}}
+          onModelChange={async (m) => {
             setModelByChat((prev) => ({ ...prev, [activeId]: m }))
             handleChatSettings({ model: m })
+            // Fetch capabilities for the new model
+            try {
+              const provs = await api.listProviders()
+              const active = provs.find((p) => p.is_active) || provs[0]
+              if (active) {
+                const data = await api.providerModels(active.id)
+                const caps = data.models?.find((mm) => mm.id === m)
+                if (caps) {
+                  setModelCaps((prev) => ({ ...prev, [m]: { vision: caps.vision, image_gen: caps.image_gen, tools: caps.tools, reasoning: caps.reasoning } }))
+                }
+              }
+            } catch { /* ignore */ }
           }}
           chatSettings={chatSettings[activeId] || {}}
           onSaveChatSettings={handleChatSettings}

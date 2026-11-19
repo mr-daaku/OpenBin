@@ -254,11 +254,19 @@ function ModelsTab({ settings, onSave, onChange }) {
   const [pinned, setPinned] = useState([])
   const [search, setSearch] = useState('')
   const [manual, setManual] = useState('')
+  const [filter, setFilter] = useState('all') // all | chat | vision | image
+
+  // Find active provider
+  const [activeProviderId, setActiveProviderId] = useState(null)
 
   const load = async () => {
     setLoading(true); setError(null)
     try {
-      const data = await api.getModels()
+      const provs = await api.listProviders()
+      const active = provs.find((p) => p.is_active) || provs[0]
+      if (!active) { setModels([]); setActiveProviderId(null); setLoading(false); return }
+      setActiveProviderId(active.id)
+      const data = await api.providerModels(active.id)
       setModels(data.models || [])
       setError(data.error)
     } catch (err) { setModels([]); setError(err.message) }
@@ -276,18 +284,36 @@ function ModelsTab({ settings, onSave, onChange }) {
   useEffect(() => { load(); loadPinned() }, [])
 
   const q = search.trim().toLowerCase()
-  const visible = models.filter((m) => !q || m.toLowerCase().includes(q))
-  const pinnedVisible = visible.filter((m) => pinned.includes(m))
-  const restVisible = visible.filter((m) => !pinned.includes(m))
+  let visible = models.filter((m) => !q || m.id.toLowerCase().includes(q))
+  // Filter by capability
+  if (filter === 'chat') visible = visible.filter((m) => !m.image_gen)
+  else if (filter === 'vision') visible = visible.filter((m) => m.vision)
+  else if (filter === 'image') visible = visible.filter((m) => m.image_gen)
+  const pinnedVisible = visible.filter((m) => pinned.includes(m.id))
+  const restVisible = visible.filter((m) => !pinned.includes(m.id))
 
   const togglePin = async (model) => {
+    if (!activeProviderId) return
     try {
-      const provs = await api.listProviders()
-      const active = provs.find((p) => p.is_active) || provs[0]
-      if (!active) return
       const nextPinned = pinned.includes(model) ? pinned.filter((m) => m !== model) : [...pinned, model]
-      await api.togglePinned(active.id, model)
+      await api.togglePinned(activeProviderId, model)
       setPinned(nextPinned)
+    } catch (err) { setError(err.message) }
+  }
+
+  const toggleCap = async (model, cap, value) => {
+    if (!activeProviderId) return
+    try {
+      await api.updateModelCaps(activeProviderId, model, { [cap]: value ? 1 : 0 })
+      setModels(models.map((m) => m.id === model ? { ...m, [cap]: value ? 1 : 0, source: 'manual' } : m))
+    } catch (err) { setError(err.message) }
+  }
+
+  const resetCap = async (model) => {
+    if (!activeProviderId) return
+    try {
+      await api.resetModelCaps(activeProviderId, model)
+      load() // reload to get auto-detected caps
     } catch (err) { setError(err.message) }
   }
 
@@ -298,6 +324,24 @@ function ModelsTab({ settings, onSave, onChange }) {
     setManual('')
   }
 
+  const isImageGenOnly = (m) => m.image_gen && !m.vision && !m.tools
+
+  const CapBadge = ({ label, value, source, onToggle, onReset, disabled }) => (
+    <button
+      onClick={() => !disabled && onToggle(!value)}
+      disabled={disabled}
+      className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition ${
+        value
+          ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+          : 'bg-neutral-100 text-neutral-500 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700'
+      }`}
+      title={source === 'manual' ? 'Manual override — click to toggle' : 'Auto-detected — click to override'}
+    >
+      {label}
+      {source === 'manual' && <span className="text-[9px]">●</span>}
+    </button>
+  )
+
   return (
     <TabPanel dirty={false} onSave={() => {}}>
       <div className="space-y-4">
@@ -307,16 +351,39 @@ function ModelsTab({ settings, onSave, onChange }) {
         </div>
         {error && <p className="text-sm text-amber-600 dark:text-amber-400">{error}</p>}
 
+        {/* Filter chips */}
+        <div className="flex gap-1.5 flex-wrap">
+          {['all', 'chat', 'vision', 'image'].map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`rounded-full px-2.5 py-1 text-xs font-medium transition ${
+                filter === f
+                  ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900'
+                  : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700'
+              }`}
+            >
+              {f.charAt(0).toUpperCase() + f.slice(1)}
+            </button>
+          ))}
+        </div>
+
         <div className="space-y-3">
           {pinnedVisible.length > 0 && (
             <div>
               <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400 mb-2">Pinned</h4>
               <div className="flex flex-wrap gap-2">
                 {pinnedVisible.map((m) => (
-                  <button key={m} onClick={() => onChange({ model: m })} className="flex items-center gap-1.5 rounded-lg border border-green-300 bg-green-50 px-3 py-1.5 text-sm font-medium text-green-700 hover:bg-green-100 dark:border-green-900 dark:bg-green-950/30 dark:text-green-400">
-                    <span className="font-mono">{m}</span>
-                    <Eye size={12} />
-                  </button>
+                  <div key={m.id} className="flex items-center gap-2 rounded-lg border border-green-300 bg-green-50 px-3 py-1.5 dark:border-green-900 dark:bg-green-950/30">
+                    <span className="font-mono text-sm text-green-700 dark:text-green-400">{m.id}</span>
+                    <div className="flex items-center gap-1">
+                      <CapBadge label="👁" value={m.vision} source={m.source} onToggle={(v) => toggleCap(m.id, 'vision', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
+                      <CapBadge label="🖼" value={m.image_gen} source={m.source} onToggle={(v) => toggleCap(m.id, 'image_gen', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
+                      <CapBadge label="🔧" value={m.tools} source={m.source} onToggle={(v) => toggleCap(m.id, 'tools', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
+                      <CapBadge label="🧠" value={m.reasoning} source={m.source} onToggle={(v) => toggleCap(m.id, 'reasoning', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
+                    </div>
+                    <button onClick={() => onChange({ model: m.id })} className="ml-1.5 text-xs text-green-600 hover:underline">Select</button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -325,9 +392,19 @@ function ModelsTab({ settings, onSave, onChange }) {
           <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400 mb-2">All models</h4>
           <div className="max-h-96 overflow-y-auto space-y-1">
             {restVisible.map((m) => (
-              <button key={m} onClick={() => onChange({ model: m })} className={`w-full text-left rounded-lg border px-3 py-2 text-sm font-mono transition ${pinned.includes(m) ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-400' : 'border-neutral-200 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800'}`}>
-                {m}
-              </button>
+              <div key={m.id} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-mono transition ${isImageGenOnly(m) ? 'border-amber-300 bg-amber-50 opacity-60 dark:border-amber-900/30 dark:bg-amber-950/20' : pinned.includes(m.id) ? 'border-blue-300 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/30' : 'border-neutral-200 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800'}`}>
+                <span className="min-w-0 flex-1 truncate">{m.id}</span>
+                <div className="flex items-center gap-1 shrink-0">
+                  <CapBadge label="👁" value={m.vision} source={m.source} onToggle={(v) => toggleCap(m.id, 'vision', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
+                  <CapBadge label="🖼" value={m.image_gen} source={m.source} onToggle={(v) => toggleCap(m.id, 'image_gen', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
+                  <CapBadge label="🔧" value={m.tools} source={m.source} onToggle={(v) => toggleCap(m.id, 'tools', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
+                  <CapBadge label="🧠" value={m.reasoning} source={m.source} onToggle={(v) => toggleCap(m.id, 'reasoning', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
+                </div>
+                {!isImageGenOnly(m) && (
+                  <button onClick={() => onChange({ model: m.id })} className="ml-1.5 shrink-0 rounded px-2 py-0.5 text-[10px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30">Select</button>
+                )}
+                {isImageGenOnly(m) && <span className="ml-1.5 shrink-0 text-[10px] text-amber-600 dark:text-amber-400">Image mode only</span>}
+              </div>
             ))}
           </div>
 
