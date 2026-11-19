@@ -99,6 +99,21 @@ export default function App() {
     }
   }, [])
 
+  // Open Settings page when hash navigates to /settings/...
+  useEffect(() => {
+    const onHash = () => {
+      if (location.hash.startsWith('#/settings/')) {
+        setSettingsPage(true)
+      } else if (settingsPage) {
+        setSettingsPage(false)
+      }
+    }
+    window.addEventListener('hashchange', onHash)
+    // Also check initial hash on mount
+    onHash()
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [settingsPage])
+
   const handleNew = useCallback(async () => {
     try {
       const chat = await api.createChat()
