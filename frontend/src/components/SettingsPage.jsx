@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ChevronDown, Copy, Download, Eye, Loader2, Moon, Save, Search, Shield, Sun, Trash2, Upload, X } from 'lucide-react'
+import { ArrowLeft, Brain, ChevronDown, Copy, Download, Eye, Loader2, Moon, Save, Search, Shield, Sun, Trash2, Upload, X } from 'lucide-react'
 import { api } from '../api.js'
 import { extractArtifacts, downloadText } from '../artifacts.js'
 
@@ -50,6 +50,16 @@ const CATEGORIES = [
     icon: Shield,
     tabs: [
       { id: 'export-import', label: 'Export / Import', component: 'ExportImportTab' },
+    ],
+  },
+  {
+    id: 'memory',
+    label: 'Memory & Personalization',
+    icon: Brain,
+    tabs: [
+      { id: 'memory', label: 'Memory', component: 'MemoryTab' },
+      { id: 'preferences', label: 'Preferences', component: 'PreferencesTab' },
+      { id: 'styles', label: 'Styles', component: 'StylesTab' },
     ],
   },
 ]
@@ -649,6 +659,313 @@ function ExportImportTab({ settings, onSave, onChange }) {
 }
 
 // ============================================================
+// Memory & Personalization tabs
+// ============================================================
+
+function MemoryTab({ settings, onSave, onChange }) {
+  const [memories, setMemories] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [newContent, setNewContent] = useState('')
+  const [newPinned, setNewPinned] = useState(false)
+  const [toast, setToast] = useState(null)
+  const [undoMemory, setUndoMemory] = useState(null)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const data = await api.listMemories()
+      setMemories(data)
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const showToast = (msg, undo = null) => {
+    setToast(msg)
+    setUndoMemory(undo)
+    setTimeout(() => { setToast(null); setUndoMemory(null) }, 5000)
+  }
+
+  const handleAdd = async () => {
+    const content = newContent.trim()
+    if (!content) return
+    try {
+      const mem = await api.createMemory(content, newPinned ? 1 : 0)
+      setMemories([mem, ...memories])
+      setNewContent('')
+      setNewPinned(false)
+      showToast('Memory added', { action: 'delete', id: mem.id })
+    } catch (err) { alert(err.message) }
+  }
+
+  const handleTogglePin = async (mem) => {
+    try {
+      const updated = await api.updateMemory(mem.id, mem.content, mem.pinned ? 0 : 1)
+      setMemories(memories.map(m => m.id === mem.id ? updated : m))
+      showToast(updated.pinned ? 'Memory pinned' : 'Memory unpinned', { action: 'togglePin', id: mem.id, prev: mem.pinned })
+    } catch (err) { alert(err.message) }
+  }
+
+  const handleDelete = async (id) => {
+    try {
+      const mem = memories.find(m => m.id === id)
+      await api.deleteMemory(id)
+      setMemories(memories.filter(m => m.id !== id))
+      showToast('Memory deleted', { action: 'restore', mem })
+    } catch (err) { alert(err.message) }
+  }
+
+  const handleUndo = () => {
+    if (!undoMemory) return
+    if (undoMemory.action === 'delete') {
+      api.deleteMemory(undoMemory.id).catch(() => {})
+    } else if (undoMemory.action === 'togglePin') {
+      api.updateMemory(undoMemory.id, memories.find(m => m.id === undoMemory.id)?.content || '', undoMemory.prev).catch(() => {})
+    } else if (undoMemory.action === 'restore') {
+      api.createMemory(undoMemory.mem.content, undoMemory.mem.pinned).catch(() => {})
+    }
+    load()
+    setToast(null)
+    setUndoMemory(null)
+  }
+
+  const handleExport = async () => {
+    try {
+      const data = await api.exportMemories()
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href = url; a.download = `openbin-memories-${new Date().toISOString().slice(0,10)}.json`; a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (err) { alert(err.message) }
+  }
+
+  const handleImport = async (e) => {
+    const file = e.target.files[0]; if (!file) return
+    const text = await file.text()
+    try {
+      const data = JSON.parse(text)
+      if (data.memories) {
+        await api.importMemories(data.memories)
+        load()
+        showToast('Memories imported')
+      }
+    } catch (err) { alert(err.message) }
+    e.target.value = ''
+  }
+
+  const handleClearAll = async () => {
+    if (!confirm('Delete ALL memories? This cannot be undone.')) return
+    try {
+      await api.clearMemories()
+      setMemories([])
+      showToast('All memories cleared')
+    } catch (err) { alert(err.message) }
+  }
+
+  return (
+    <TabPanel dirty={false} onSave={() => {}}>
+      <div className="space-y-4">
+        {/* Add memory */}
+        <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+          <h4 className="text-sm font-semibold mb-3">Add memory</h4>
+          <div className="space-y-3">
+            <textarea
+              value={newContent}
+              onChange={(e) => setNewContent(e.target.value)}
+              placeholder="What should I remember? (e.g., 'User prefers TypeScript', 'User works on a React project')"
+              rows={3}
+              className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm resize-y dark:border-neutral-700"
+            />
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 text-sm">
+                <input type="checkbox" checked={newPinned} onChange={(e) => setNewPinned(e.target.checked)} className="rounded border-neutral-300" />
+                Pinned (always included in context)
+              </label>
+              <button onClick={handleAdd} disabled={loading || !newContent.trim()} className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50 dark:bg-white dark:text-neutral-900">{loading ? <Loader2 size={14} className="mx-auto animate-spin" /> : 'Add memory'}</button>
+            </div>
+          </div>
+        </div>
+
+        {/* Memory list */}
+        <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-sm font-semibold">Memories ({memories.length})</h4>
+            <div className="flex gap-2">
+              <button onClick={handleExport} className="rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-medium hover:bg-neutral-100 dark:border-neutral-700">Export JSON</button>
+              <input type="file" accept=".json" onChange={handleImport} className="hidden" id="mem-import" ref={(el) => el && (window.memImportRef = el)} />
+              <button onClick={() => window.memImportRef?.click()} className="rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-medium hover:bg-neutral-100 dark:border-neutral-700">Import JSON</button>
+              <button onClick={handleClearAll} className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-red-700 dark:hover:bg-red-950/30">Clear all</button>
+            </div>
+          </div>
+          {loading ? (
+            <p className="text-sm text-neutral-500">Loading…</p>
+          ) : memories.length === 0 ? (
+            <p className="text-sm text-neutral-500">No memories yet. Add one above.</p>
+          ) : (
+            <ul className="space-y-2 max-h-96 overflow-y-auto">
+              {memories.map((mem) => (
+                <li key={mem.id} className={`flex items-start gap-3 rounded-lg border p-3 ${mem.pinned ? 'border-amber-300 bg-amber-50 dark:border-amber-900/30 dark:bg-amber-950/20' : 'border-neutral-200 dark:border-neutral-700'}`}>
+                  <input type="checkbox" checked={mem.pinned} onChange={() => handleTogglePin(mem)} className="mt-1 shrink-0 rounded border-neutral-300" title="Pin to always include" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm whitespace-pre-wrap break-words">{mem.content}</p>
+                    <div className="flex items-center gap-2 mt-1.5 text-[11px] text-neutral-500">
+                      <span>{mem.source === 'manual' ? '📝 Manual' : '🤖 Auto'}</span>
+                      <span>·</span>
+                      <span>{new Date(mem.updated_at).toLocaleString()}</span>
+                    </div>
+                  </div>
+                  <button onClick={() => handleDelete(mem.id)} className="shrink-0 text-red-500 hover:text-red-700 text-sm font-medium" title="Delete">Delete</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </TabPanel>
+  )
+}
+
+function PreferencesTab({ settings, onSave, onChange }) {
+  const [language, setLanguage] = useState(settings.language || 'auto')
+  const [tone, setTone] = useState(settings.tone || 'casual')
+  const [responseLength, setResponseLength] = useState(settings.response_length || 'normal')
+  const dirty = language !== settings.language || tone !== settings.tone || responseLength !== settings.response_length
+
+  useEffect(() => { setLanguage(settings.language || 'auto'); setTone(settings.tone || 'casual'); setResponseLength(settings.response_length || 'normal') }, [settings.language, settings.tone, settings.response_length])
+
+  return (
+    <TabPanel dirty={dirty} onSave={() => onSave({ language, tone, response_length: responseLength })}>
+      <div className="space-y-6">
+        <div>
+          <label className="block text-xs font-medium mb-2">Language</label>
+          <div className="flex gap-2 flex-wrap">
+            {['auto', 'english', 'hindi', 'hinglish'].map((l) => (
+              <button key={l} onClick={() => setLanguage(l)} className={`rounded-lg border px-3 py-2 text-sm font-medium transition ${language === l ? 'bg-neutral-900 text-white border-neutral-900 dark:bg-white dark:text-neutral-900 dark:border-white' : 'border-neutral-200 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800'}`}>
+                {l.charAt(0).toUpperCase() + l.slice(1)}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-neutral-500">Auto detects the user's language from the message.</p>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium mb-2">Tone</label>
+          <div className="flex gap-2 flex-wrap">
+            {['casual', 'concise', 'explanatory', 'formal'].map((t) => (
+              <button key={t} onClick={() => setTone(t)} className={`rounded-lg border px-3 py-2 text-sm font-medium transition ${tone === t ? 'bg-neutral-900 text-white border-neutral-900 dark:bg-white dark:text-neutral-900 dark:border-white' : 'border-neutral-200 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800'}`}>
+                {t.charAt(0).toUpperCase() + t.slice(1)}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-neutral-500">Custom styles can be created in the Styles tab.</p>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium mb-2">Response length</label>
+          <div className="flex gap-2 flex-wrap">
+            {['short', 'normal', 'long'].map((l) => (
+              <button key={l} onClick={() => setResponseLength(l)} className={`rounded-lg border px-3 py-2 text-sm font-medium transition ${responseLength === l ? 'bg-neutral-900 text-white border-neutral-900 dark:bg-white dark:text-neutral-900 dark:border-white' : 'border-neutral-200 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800'}`}>
+                {l.charAt(0).toUpperCase() + l.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </TabPanel>
+  )
+}
+
+function StylesTab({ settings, onSave, onChange }) {
+  const [styles, setStyles] = useState(settings.custom_styles ? JSON.parse(settings.custom_styles) : [])
+  const [activeStyle, setActiveStyle] = useState(settings.active_style || 'Casual')
+  const [newName, setNewName] = useState('')
+  const [newInstruction, setNewInstruction] = useState('')
+  const dirty = JSON.stringify(styles) !== settings.custom_styles || activeStyle !== settings.active_style
+
+  useEffect(() => { setStyles(settings.custom_styles ? JSON.parse(settings.custom_styles) : []) }, [settings.custom_styles])
+  useEffect(() => { setActiveStyle(settings.active_style || 'Casual') }, [settings.active_style])
+
+  const presets = [
+    { name: 'Normal', instruction: 'Answer in a balanced, helpful way.' },
+    { name: 'Concise', instruction: 'Be extremely brief. Give the shortest useful answer.' },
+    { name: 'Explanatory', instruction: 'Explain concepts thoroughly with examples. Teach, don\'t just answer.' },
+    { name: 'Formal', instruction: 'Use formal, professional language. No contractions or slang.' },
+    { name: 'Casual', instruction: 'Be friendly and conversational. Use casual language.' },
+  ]
+
+  const handleAddStyle = () => {
+    const name = newName.trim()
+    const instruction = newInstruction.trim()
+    if (!name || !instruction) return
+    if (styles.some(s => s.name === name) || presets.some(p => p.name === name)) {
+      alert('Style name already exists')
+      return
+    }
+    setStyles([...styles, { name, instruction }])
+    setNewName('')
+    setNewInstruction('')
+  }
+
+  const handleDeleteStyle = (name) => {
+    setStyles(styles.filter(s => s.name !== name))
+    if (activeStyle === name) setActiveStyle('Casual')
+  }
+
+  const handleSelectStyle = (name) => setActiveStyle(name)
+
+  return (
+    <TabPanel dirty={dirty} onSave={() => onSave({ custom_styles: JSON.stringify(styles), active_style: activeStyle })}>
+      <div className="space-y-6">
+        {/* Presets */}
+        <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+          <h4 className="text-sm font-semibold mb-3">Built-in styles (cannot be edited)</h4>
+          <div className="flex gap-2 flex-wrap">
+            {presets.map((s) => (
+              <button key={s.name} onClick={() => handleSelectStyle(s.name)} className={`rounded-lg border px-3 py-2 text-sm font-medium transition ${activeStyle === s.name ? 'bg-neutral-900 text-white border-neutral-900 dark:bg-white dark:text-neutral-900 dark:border-white' : 'border-neutral-200 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800'}`}>
+                {s.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Custom styles */}
+        <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+          <h4 className="text-sm font-semibold mb-3">Custom styles</h4>
+          <div className="space-y-3 mb-4">
+            {styles.map((s) => (
+              <div key={s.name} className="flex items-start gap-2 rounded-lg border border-neutral-200 p-3 dark:border-neutral-700">
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium">{s.name}</p>
+                  <p className="text-xs text-neutral-500 truncate">{s.instruction}</p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button onClick={() => handleSelectStyle(s.name)} className={`rounded px-2 py-1 text-xs ${activeStyle === s.name ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900' : 'bg-neutral-100 dark:bg-neutral-800'}`}>
+                    {activeStyle === s.name ? 'Active' : 'Use'}
+                  </button>
+                  <button onClick={() => handleDeleteStyle(s.name)} className="rounded px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30">Delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="border-t border-neutral-200 pt-4 dark:border-neutral-800">
+            <h5 className="text-xs font-semibold mb-2">Create custom style</h5>
+            <div className="space-y-2">
+              <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Style name (e.g., 'Code Reviewer')" className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700" />
+              <textarea value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} placeholder="Instruction for the model (e.g., 'Act as a senior code reviewer. Be thorough but kind.')}" rows={3} className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm resize-y dark:border-neutral-700" />
+              <button onClick={handleAddStyle} className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 dark:bg-white dark:text-neutral-900">Add style</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </TabPanel>
+  )
+}
+
+// ============================================================
 // Shared UI pieces
 // ============================================================
 
@@ -680,6 +997,9 @@ const TAB_COMPONENTS = {
   SearchProvidersTab,
   SearchBehaviorTab,
   ExportImportTab,
+  MemoryTab,
+  PreferencesTab,
+  StylesTab,
 }
 
 // ============================================================

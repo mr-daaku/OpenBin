@@ -69,3 +69,13 @@ CREATE TABLE IF NOT EXISTS model_caps (
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (provider_id, model)
 );
+
+-- Memory system: durable facts the assistant remembers about the user
+CREATE TABLE IF NOT EXISTS memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    source TEXT NOT NULL DEFAULT 'auto',  -- 'auto' | 'manual'
+    pinned INTEGER NOT NULL DEFAULT 0
+);

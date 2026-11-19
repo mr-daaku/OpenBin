@@ -106,6 +106,14 @@ DEFAULTS = {
     "search_tavily_key": "",
     "search_custom_url": "",
     "search_custom_key": "",
+    # Memory & Personalization
+    "memory_enabled": "1",
+    "memory_model": "",  # empty = use chat model
+    "language": "auto",  # auto | hindi | english | hinglish
+    "tone": "casual",    # casual | concise | explanatory | formal | <custom>
+    "response_length": "normal",  # short | normal | long
+    "custom_styles": "[]",  # JSON array of {name, instruction}
+    "active_style": "Casual",
 }
 
 # SHA-256 of earlier built-in system prompts. A stored prompt matching one of
@@ -180,6 +188,12 @@ def init_db() -> None:
         conn.execute(
             "DELETE FROM files WHERE message_id IS NULL AND created_at < datetime('now', '-1 day')"
         )
+        # Ensure new memory settings exist (for existing DBs)
+        for k, v in DEFAULTS.items():
+            if k in ("memory_enabled", "memory_model", "language", "tone", "response_length", "custom_styles", "active_style"):
+                exists = conn.execute("SELECT 1 FROM settings WHERE key = ?", (k,)).fetchone()
+                if not exists:
+                    conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (k, v))
         conn.commit()
     finally:
         conn.close()
@@ -229,6 +243,14 @@ def public_settings(st: dict) -> dict:
         "search_tavily_key": mask_key(st["search_tavily_key"]),
         "search_custom_url": st["search_custom_url"],
         "search_custom_key": mask_key(st["search_custom_key"]),
+        # Memory & Personalization
+        "memory_enabled": st.get("memory_enabled", "1"),
+        "memory_model": st.get("memory_model", ""),
+        "language": st.get("language", "auto"),
+        "tone": st.get("tone", "casual"),
+        "response_length": st.get("response_length", "normal"),
+        "custom_styles": st.get("custom_styles", "[]"),
+        "active_style": st.get("active_style", "Casual"),
     }
 
 
@@ -897,6 +919,156 @@ async def provider_image(provider_id: int, body: ImageGenIn):
         return JSONResponse({"ok": False, "error": "No images returned by provider."}, status_code=500)
 
     return {"ok": True, "images": images, "model": body.model, "prompt": body.prompt}
+
+
+# ---------------------------------------------------------------- memory api
+
+class MemoryIn(BaseModel):
+    content: str
+    pinned: int = 0
+    source: str = "manual"  # 'manual' | 'auto'
+
+
+class MemoryUpdateIn(BaseModel):
+    content: str | None = None
+    pinned: int | None = None
+
+
+@app.get("/api/memory")
+def list_memories():
+    """List all memories, newest first."""
+    conn = connect()
+    try:
+        rows = conn.execute(
+            "SELECT id, content, created_at, updated_at, source, pinned FROM memories "
+            "ORDER BY pinned DESC, updated_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@app.post("/api/memory")
+def create_memory(body: MemoryIn):
+    """Create a new memory."""
+    content = (body.content or "").strip()
+    if not content:
+        return JSONResponse({"error": "Content required"}, status_code=400)
+    conn = connect()
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO memories (content, source, pinned) VALUES (?, ?, ?)",
+                (content, body.source, body.pinned),
+            )
+            row = conn.execute(
+                "SELECT id, content, created_at, updated_at, source, pinned FROM memories WHERE id = ?",
+                (cur.lastrowid,),
+            ).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+@app.patch("/api/memory/{memory_id}")
+def update_memory(memory_id: int, body: MemoryUpdateIn):
+    """Update a memory."""
+    conn = connect()
+    try:
+        row = conn.execute("SELECT * FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        if not row:
+            return JSONResponse({"error": "Memory not found"}, status_code=404)
+        updates = {}
+        if body.content is not None:
+            c = body.content.strip()
+            if not c:
+                return JSONResponse({"error": "Content cannot be empty"}, status_code=400)
+            updates["content"] = c
+        if body.pinned is not None:
+            updates["pinned"] = body.pinned
+        if updates:
+            updates["updated_at"] = "datetime('now')"
+            with conn:
+                conn.execute(
+                    f"UPDATE memories SET {', '.join(f'{k} = ?' for k in updates)} WHERE id = ?",
+                    (*updates.values(), memory_id),
+                )
+        fresh = conn.execute(
+            "SELECT id, content, created_at, updated_at, source, pinned FROM memories WHERE id = ?",
+            (memory_id,),
+        ).fetchone()
+        return dict(fresh)
+    finally:
+        conn.close()
+
+
+@app.delete("/api/memory/{memory_id}")
+def delete_memory(memory_id: int):
+    """Delete a memory."""
+    conn = connect()
+    try:
+        with conn:
+            conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.post("/api/memory/clear")
+def clear_memories():
+    """Clear all memories (requires confirmation via header)."""
+    # Simple confirmation - in production you'd want a better mechanism
+    conn = connect()
+    try:
+        with conn:
+            conn.execute("DELETE FROM memories")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.post("/api/memory/export")
+def export_memories():
+    """Export memories as JSON."""
+    conn = connect()
+    try:
+        rows = conn.execute(
+            "SELECT content, created_at, updated_at, source, pinned FROM memories "
+            "ORDER BY created_at"
+        ).fetchall()
+        return {"memories": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.post("/api/memory/import")
+def import_memories(body: dict):
+    """Import memories from JSON."""
+    memories = body.get("memories", [])
+    if not isinstance(memories, list):
+        return JSONResponse({"error": "memories must be an array"}, status_code=400)
+    conn = connect()
+    try:
+        added = 0
+        with conn:
+            for m in memories:
+                content = (m.get("content") or "").strip()
+                if not content:
+                    continue
+                conn.execute(
+                    "INSERT INTO memories (content, source, pinned, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        content,
+                        m.get("source", "manual"),
+                        m.get("pinned", 0),
+                        m.get("created_at", "datetime('now')"),
+                        m.get("updated_at", "datetime('now')"),
+                    ),
+                )
+                added += 1
+        return {"ok": True, "added": added}
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------- chats api

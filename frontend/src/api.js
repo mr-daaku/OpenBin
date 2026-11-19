@@ -53,6 +53,15 @@ export const api = {
 
   generateImage: (providerId, model, prompt, size, n) => request(`/api/providers/${providerId}/image`, { method: 'POST', body: JSON.stringify({ model, prompt, size, n }) }),
 
+  // Memory
+  listMemories: () => request('/api/memory'),
+  createMemory: (content, pinned) => request('/api/memory', { method: 'POST', body: JSON.stringify({ content, pinned }) }),
+  updateMemory: (id, content, pinned) => request(`/api/memory/${id}`, { method: 'PATCH', body: JSON.stringify({ content, pinned }) }),
+  deleteMemory: (id) => request(`/api/memory/${id}`, { method: 'DELETE' }),
+  clearMemories: () => request('/api/memory/clear', { method: 'POST' }),
+  exportMemories: () => request('/api/memory/export', { method: 'POST' }),
+  importMemories: (memories) => request('/api/memory/import', { method: 'POST', body: JSON.stringify({ memories }) }),
+
   uploadFile: async (file, chatId) => {
     const fd = new FormData()
     fd.append('file', file)
