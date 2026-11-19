@@ -6,7 +6,12 @@ import { api } from './api.js'
 import useChat from './useChat.js'
 
 function applyTheme(theme) {
-  document.documentElement.classList.toggle('dark', theme !== 'light')
+  if (theme === 'system') {
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    document.documentElement.classList.toggle('dark', prefersDark)
+  } else {
+    document.documentElement.classList.toggle('dark', theme === 'dark')
+  }
 }
 
 export default function App() {
@@ -100,6 +105,15 @@ export default function App() {
       alive = false
     }
   }, [])
+
+  // Listen for system theme changes when theme is "system"
+  useEffect(() => {
+    if (settings?.theme !== 'system') return
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    const handler = (e) => applyTheme('system')
+    mediaQuery.addEventListener('change', handler)
+    return () => mediaQuery.removeEventListener('change', handler)
+  }, [settings?.theme])
 
   // Open Settings page when hash navigates to /settings/...
   useEffect(() => {
