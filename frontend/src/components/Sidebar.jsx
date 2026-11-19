@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { EyeOff, FileUp, Pin, PinOff, Pencil, Plus, Settings, Search, Trash2, X, Check } from 'lucide-react'
+import { EyeOff, FileUp, Pin, PinOff, Pencil, Plus, Search, Trash2, X, Check } from 'lucide-react'
 
 function groupOf(createdAt) {
   const d = new Date(String(createdAt).replace(' ', 'T') + 'Z')
@@ -29,7 +29,6 @@ export default function Sidebar({
   onDelete,
   onTogglePin,
   onImport,
-  onOpenSettings,
   onClose,
 }) {
   const [editingId, setEditingId] = useState(null)
@@ -222,10 +221,10 @@ export default function Sidebar({
               Import
             </button>
             <button
-              onClick={onOpenSettings}
+              onClick={() => { location.hash = '/settings/providers/providers' }}
               className="flex items-center justify-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-medium hover:bg-neutral-200 dark:hover:bg-neutral-800"
             >
-              <Settings size={15} />
+              <Search size={15} />
               Settings
             </button>
           </div>

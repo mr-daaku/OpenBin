@@ -1,0 +1,707 @@
+import { useEffect, useMemo, useState } from 'react'
+import { ArrowLeft, ChevronDown, Copy, Download, Eye, Loader2, Moon, Save, Search, Shield, Sun, Trash2, Upload, X } from 'lucide-react'
+import { api } from '../api.js'
+import { extractArtifacts, downloadText } from '../artifacts.js'
+
+// ============================================================
+// Tab configuration — add a new entry here and it Just Works.
+// ============================================================
+const CATEGORIES = [
+  {
+    id: 'general',
+    label: 'General',
+    icon: Shield,
+    tabs: [
+      { id: 'appearance', label: 'Appearance', component: 'AppearanceTab' },
+      { id: 'about', label: 'About', component: 'AboutTab' },
+    ],
+  },
+  {
+    id: 'providers',
+    label: 'Providers & Models',
+    icon: Shield,
+    tabs: [
+      { id: 'providers', label: 'Providers', component: 'ProvidersTab' },
+      { id: 'models', label: 'Models', component: 'ModelsTab' },
+      { id: 'defaults', label: 'Defaults', component: 'DefaultsTab' },
+    ],
+  },
+  {
+    id: 'chat',
+    label: 'Chat',
+    icon: Shield,
+    tabs: [
+      { id: 'system-prompt', label: 'System prompt', component: 'SystemPromptTab' },
+      { id: 'generation', label: 'Generation', component: 'GenerationTab' },
+    ],
+  },
+  {
+    id: 'search',
+    label: 'Search & Research',
+    icon: Search,
+    tabs: [
+      { id: 'search-providers', label: 'Providers', component: 'SearchProvidersTab' },
+      { id: 'search-behavior', label: 'Behavior', component: 'SearchBehaviorTab' },
+    ],
+  },
+  {
+    id: 'data',
+    label: 'Data',
+    icon: Shield,
+    tabs: [
+      { id: 'export-import', label: 'Export / Import', component: 'ExportImportTab' },
+    ],
+  },
+]
+
+function findTab(catId, tabId) {
+  const cat = CATEGORIES.find((c) => c.id === catId)
+  return cat?.tabs.find((t) => t.id === tabId)
+}
+
+function parseHash() {
+  // #/settings/providers/models -> { cat: 'providers', tab: 'models' }
+  const h = location.hash.slice(1) // drop #
+  if (!h.startsWith('/settings/')) return { cat: 'general', tab: 'appearance' }
+  const parts = h.split('/').slice(2) // ['providers', 'models']
+  const cat = parts[0] || 'general'
+  const tab = parts[1] || CATEGORIES.find((c) => c.id === cat)?.tabs[0]?.id || 'appearance'
+  return { cat, tab }
+}
+
+// ============================================================
+// Individual tab components (each manages its own dirty state)
+// ============================================================
+
+function AppearanceTab({ settings, onSave, onChange }) {
+  const [theme, setTheme] = useState(settings.theme || 'dark')
+  useEffect(() => setTheme(settings.theme || 'dark'), [settings.theme])
+  const dirty = theme !== (settings.theme || 'dark')
+  return (
+    <TabPanel dirty={dirty} onSave={() => onSave({ theme })}>
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs font-medium mb-1">Theme</label>
+          <div className="flex gap-2">
+            {['dark', 'light', 'system'].map((t) => (
+              <button
+                key={t}
+                onClick={() => setTheme(t)}
+                className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                  theme === t
+                    ? 'bg-neutral-900 text-white border-neutral-900 dark:bg-white dark:text-neutral-900 dark:border-white'
+                    : 'border-neutral-200 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800'
+                }`}
+              >
+                {t.charAt(0).toUpperCase() + t.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </TabPanel>
+  )
+}
+
+function AboutTab({ settings }) {
+  return (
+    <TabPanel dirty={false} onSave={() => {}}>
+      <div className="space-y-3 text-sm text-neutral-600 dark:text-neutral-400">
+        <p><strong>OpenBin</strong> — local chat app (React + FastAPI + SQLite)</p>
+        <p>Version: <code className="font-mono">0.1.9</code></p>
+        <p>Backend: 127.0.0.1:8000 | Frontend: Vite dev server</p>
+        <p className="mt-4">All data stays on this computer. No telemetry.</p>
+      </div>
+    </TabPanel>
+  )
+}
+
+function ProvidersTab({ settings, onSave, onChange }) {
+  const [providers, setProviders] = useState([])
+  const [editing, setEditing] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [form, setForm] = useState({ name: '', preset: 'custom', base_url: '', api_key: '' })
+  const [testResult, setTestResult] = useState(null)
+  const [busy, setBusy] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    api.listProviders().then((data) => alive && setProviders(data)).finally(() => alive && setLoading(false))
+    return () => { alive = false }
+  }, [])
+
+  const resetForm = () => setForm({ name: '', preset: 'custom', base_url: '', api_key: '' })
+
+  const startEdit = (p) => {
+    setEditing(p.id)
+    setForm({ name: p.name, preset: p.preset, base_url: p.base_url, api_key: p.api_key })
+  }
+
+  const cancelEdit = () => { setEditing(null); resetForm() }
+
+  const saveProvider = async () => {
+    if (!form.name.trim() || !form.base_url.trim()) return
+    setBusy('save')
+    try {
+      if (editing) {
+        await api.updateProvider(editing, form)
+      } else {
+        await api.createProvider(form)
+      }
+      setEditing(null)
+      resetForm()
+      const data = await api.listProviders()
+      setProviders(data)
+    } catch (err) { setTestResult({ ok: false, error: err.message }) }
+    finally { setBusy(null) }
+  }
+
+  const deleteProvider = async (id) => {
+    if (!confirm('Delete this provider?')) return
+    await api.deleteProvider(id)
+    const data = await api.listProviders()
+    setProviders(data)
+  }
+
+  const activateProvider = async (id) => {
+    await api.activateProvider(id)
+    const data = await api.listProviders()
+    setProviders(data)
+  }
+
+  const testProvider = async () => {
+    if (!form.base_url.trim() || !form.api_key.trim()) return
+    setBusy('test')
+    try {
+      const res = await api.testProvider(form.base_url, { api_key: form.api_key, model: '' })
+      setTestResult(res)
+    } catch (err) { setTestResult({ ok: false, error: err.message }) }
+    finally { setBusy(null) }
+  }
+
+  const dirty = editing !== null || testResult !== null
+
+  if (loading) return <TabPanel dirty={false} onSave={() => {}}><p className="text-sm text-neutral-500">Loading…</p></TabPanel>
+
+  return (
+    <TabPanel dirty={dirty} onSave={saveProvider}>
+      <div className="space-y-4">
+        <h4 className="text-sm font-semibold">Saved providers</h4>
+        {providers.length === 0 && <p className="text-sm text-neutral-500">No providers yet. Add one below.</p>}
+        <ul className="space-y-2">
+          {providers.map((p) => (
+            <li key={p.id} className={`flex items-center gap-3 rounded-lg border p-3 ${p.is_active ? 'border-green-300 bg-green-50 dark:border-green-900/30 dark:bg-green-950/20' : 'border-neutral-200 dark:border-neutral-700'}`}>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium truncate">{p.name}</span>
+                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400">{p.preset}</span>
+                  {p.is_active && <span className="text-[11px] text-green-600 dark:text-green-400">● Active</span>}
+                </div>
+                <div className="text-[11px] text-neutral-500 truncate font-mono">{p.base_url}</div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {!p.is_active && <button onClick={() => activateProvider(p.id)} className="text-xs text-blue-600 hover:underline">Activate</button>}
+                <button onClick={() => startEdit(p)} className="text-xs text-neutral-600 hover:underline">Edit</button>
+                <button onClick={() => deleteProvider(p.id)} className="text-xs text-red-600 hover:underline">Delete</button>
+              </div>
+            </li>
+          ))}
+        </ul>
+
+        <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+          <h4 className="text-sm font-semibold mb-3">{editing ? 'Edit provider' : 'Add provider'}</h4>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium mb-1">Name</label>
+              <input value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} placeholder="My NVIDIA" className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">Preset</label>
+              <select value={form.preset} onChange={(e) => setForm({...form, preset: e.target.value})} className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700">
+                <option value="nvidia">NVIDIA NIM</option>
+                <option value="openai">OpenAI</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="groq">Groq</option>
+                <option value="ollama">Ollama</option>
+                <option value="custom">Custom / Other</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">Base URL</label>
+              <input value={form.base_url} onChange={(e) => setForm({...form, base_url: e.target.value})} placeholder="https://api.example.com/v1" className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm font-mono dark:border-neutral-700" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">API key <span className="text-neutral-400">(masked after save)</span></label>
+              <input type="password" value={form.api_key} onChange={(e) => setForm({...form, api_key: e.target.value})} placeholder="sk-… or leave empty to keep existing" autoComplete="off" className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm font-mono dark:border-neutral-700" />
+            </div>
+          </div>
+          <div className="mt-4 flex gap-2">
+            <button onClick={saveProvider} disabled={busy !== null} className="flex-1 rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50 dark:bg-white dark:text-neutral-900">{busy === 'save' ? <Loader2 size={14} className="mx-auto animate-spin" /> : 'Save'}</button>
+            <button onClick={testProvider} disabled={busy !== null} className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700">{busy === 'test' ? <Loader2 size={14} className="mx-auto animate-spin" /> : 'Test'}</button>
+            {editing && <button onClick={cancelEdit} className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-100 dark:border-neutral-700">Cancel</button>}
+          </div>
+          {testResult && <div className={`mt-3 rounded-lg p-3 text-sm ${testResult.ok ? 'bg-green-50 text-green-700 dark:bg-green-950/50 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300'}`}>{testResult.ok ? 'Connection OK' : testResult.error}</div>}
+        </div>
+      </div>
+    </TabPanel>
+  )
+}
+
+function ModelsTab({ settings, onSave, onChange }) {
+  const [models, setModels] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [pinned, setPinned] = useState([])
+  const [search, setSearch] = useState('')
+  const [manual, setManual] = useState('')
+
+  const load = async () => {
+    setLoading(true); setError(null)
+    try {
+      const data = await api.getModels()
+      setModels(data.models || [])
+      setError(data.error)
+    } catch (err) { setModels([]); setError(err.message) }
+    finally { setLoading(false) }
+  }
+
+  const loadPinned = async () => {
+    try {
+      const provs = await api.listProviders()
+      const active = provs.find((p) => p.is_active) || provs[0]
+      setPinned(active?.pinned || [])
+    } catch { /* ignore */ }
+  }
+
+  useEffect(() => { load(); loadPinned() }, [])
+
+  const q = search.trim().toLowerCase()
+  const visible = models.filter((m) => !q || m.toLowerCase().includes(q))
+  const pinnedVisible = visible.filter((m) => pinned.includes(m))
+  const restVisible = visible.filter((m) => !pinned.includes(m))
+
+  const togglePin = async (model) => {
+    try {
+      const provs = await api.listProviders()
+      const active = provs.find((p) => p.is_active) || provs[0]
+      if (!active) return
+      const nextPinned = pinned.includes(model) ? pinned.filter((m) => m !== model) : [...pinned, model]
+      await api.togglePinned(active.id, model)
+      setPinned(nextPinned)
+    } catch (err) { setError(err.message) }
+  }
+
+  const useManual = () => {
+    const v = manual.trim()
+    if (!v) return
+    onChange({ model: v })
+    setManual('')
+  }
+
+  return (
+    <TabPanel dirty={false} onSave={() => {}}>
+      <div className="space-y-4">
+        <div className="flex gap-2">
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search models…" className="flex-1 rounded-lg border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700" />
+          <button onClick={load} disabled={loading} className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700">{loading ? <Loader2 size={14} className="mx-auto animate-spin" /> : 'Reload'}</button>
+        </div>
+        {error && <p className="text-sm text-amber-600 dark:text-amber-400">{error}</p>}
+
+        <div className="space-y-3">
+          {pinnedVisible.length > 0 && (
+            <div>
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400 mb-2">Pinned</h4>
+              <div className="flex flex-wrap gap-2">
+                {pinnedVisible.map((m) => (
+                  <button key={m} onClick={() => onChange({ model: m })} className="flex items-center gap-1.5 rounded-lg border border-green-300 bg-green-50 px-3 py-1.5 text-sm font-medium text-green-700 hover:bg-green-100 dark:border-green-900 dark:bg-green-950/30 dark:text-green-400">
+                    <span className="font-mono">{m}</span>
+                    <Eye size={12} />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400 mb-2">All models</h4>
+          <div className="max-h-96 overflow-y-auto space-y-1">
+            {restVisible.map((m) => (
+              <button key={m} onClick={() => onChange({ model: m })} className={`w-full text-left rounded-lg border px-3 py-2 text-sm font-mono transition ${pinned.includes(m) ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-400' : 'border-neutral-200 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800'}`}>
+                {m}
+              </button>
+            ))}
+          </div>
+
+          <div className="border-t border-neutral-200 pt-3 dark:border-neutral-800">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400 mb-2">Manual model ID</h4>
+            <div className="flex gap-2">
+              <input value={manual} onChange={(e) => setManual(e.target.value)} placeholder="org/model-name" className="flex-1 rounded-lg border border-neutral-300 px-3 py-2 text-sm font-mono dark:border-neutral-700" onKeyDown={(e) => e.key === 'Enter' && useManual()} />
+              <button onClick={useManual} className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 dark:bg-white dark:text-neutral-900">Use</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </TabPanel>
+  )
+}
+
+function DefaultsTab({ settings, onSave, onChange }) {
+  const [model, setModel] = useState(settings.model || '')
+  const dirty = model !== (settings.model || '')
+  useEffect(() => setModel(settings.model || ''), [settings.model])
+  return (
+    <TabPanel dirty={dirty} onSave={() => onSave({ model })}>
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs font-medium mb-1">Default model for new chats</label>
+          <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Leave empty to use provider default" className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm font-mono dark:border-neutral-700" />
+        </div>
+      </div>
+    </TabPanel>
+  )
+}
+
+function SystemPromptTab({ settings, onSave, onChange }) {
+  const [prompt, setPrompt] = useState(settings.system_prompt || '')
+  const dirty = prompt !== (settings.system_prompt || '')
+  useEffect(() => setPrompt(settings.system_prompt || ''), [settings.system_prompt])
+  return (
+    <TabPanel dirty={dirty} onSave={() => onSave({ system_prompt: prompt })}>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-medium">Global system prompt (used when chat has no override)</label>
+          <button onClick={() => setPrompt(settings.system_prompt || '')} className="text-xs text-blue-600 hover:underline">Reset to built-in default</button>
+        </div>
+        <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={12} className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm font-mono resize-y dark:border-neutral-700" />
+        <p className="text-xs text-neutral-500">Per-chat overrides can be set from the chat header (sliders icon).</p>
+      </div>
+    </TabPanel>
+  )
+}
+
+function GenerationTab({ settings, onSave, onChange }) {
+  const [temperature, setTemperature] = useState(Number(settings.temperature ?? 0.7))
+  const [maxTokens, setMaxTokens] = useState(Number(settings.max_tokens ?? 1024))
+  const [topP, setTopP] = useState(Number(settings.top_p ?? 1))
+  const [historyLimit, setHistoryLimit] = useState(Number(settings.history_limit ?? 12))
+  const dirty = temperature !== Number(settings.temperature ?? 0.7) || maxTokens !== Number(settings.max_tokens ?? 1024) || topP !== Number(settings.top_p ?? 1) || historyLimit !== Number(settings.history_limit ?? 12)
+  useEffect(() => { setTemperature(Number(settings.temperature ?? 0.7)); setMaxTokens(Number(settings.max_tokens ?? 1024)); setTopP(Number(settings.top_p ?? 1)); setHistoryLimit(Number(settings.history_limit ?? 12)) }, [settings.temperature, settings.max_tokens, settings.top_p, settings.history_limit])
+
+  return (
+    <TabPanel dirty={dirty} onSave={() => onSave({ temperature, max_tokens: maxTokens, top_p: topP, history_limit: historyLimit })}>
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs font-medium mb-1">Temperature <span className="font-mono text-neutral-500">{temperature.toFixed(1)}</span></label>
+          <input type="range" min="0" max="2" step="0.1" value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} className="w-full accent-neutral-900 dark:accent-neutral-100" />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium mb-1">Max tokens</label>
+            <input type="number" min="1" value={maxTokens} onChange={(e) => setMaxTokens(Number(e.target.value))} className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1">Top-p</label>
+            <input type="number" min="0" max="1" step="0.05" value={topP} onChange={(e) => setTopP(Number(e.target.value))} className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700" />
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-medium mb-1">History limit (messages per request)</label>
+          <input type="number" min="1" max="50" value={historyLimit} onChange={(e) => setHistoryLimit(Number(e.target.value))} className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700" />
+        </div>
+      </div>
+    </TabPanel>
+  )
+}
+
+function SearchProvidersTab({ settings, onSave, onChange }) {
+  const [provider, setProvider] = useState(settings.search_provider || 'gradio')
+  const [space, setSpace] = useState(settings.search_space || '')
+  const [key, setKey] = useState(settings.search_key || '')
+  const [tavilyKey, setTavilyKey] = useState(settings.search_tavily_key || '')
+  const [customUrl, setCustomUrl] = useState(settings.search_custom_url || '')
+  const [customKey, setCustomKey] = useState(settings.search_custom_key || '')
+  const [testQuery, setTestQuery] = useState('latest AI news')
+  const [fetchUrl, setFetchUrl] = useState('')
+  const [testResult, setTestResult] = useState(null)
+  const [busy, setBusy] = useState(null)
+  const dirty = provider !== settings.search_provider || space !== settings.search_space || key !== settings.search_key || tavilyKey !== settings.search_tavily_key || customUrl !== settings.search_custom_url || customKey !== settings.search_custom_key
+
+  const runSearchTest = async () => {
+    setBusy('search'); setTestResult(null)
+    try { setTestResult(await api.testSearch(testQuery)) } catch (e) { setTestResult({ ok: false, error: e.message }) }
+    finally { setBusy(null) }
+  }
+  const runFetchTest = async () => {
+    const u = fetchUrl.trim(); if (!u) return
+    setBusy('fetch'); setTestResult(null)
+    try { setTestResult(await api.testFetch(u)) } catch (e) { setTestResult({ ok: false, error: e.message }) }
+    finally { setBusy(null) }
+  }
+
+  return (
+    <TabPanel dirty={dirty} onSave={() => onSave({ search_provider: provider, search_space: space, search_key: key, search_tavily_key: tavilyKey, search_custom_url: customUrl, search_custom_key: customKey })}>
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs font-medium mb-1">Provider</label>
+          <select value={provider} onChange={(e) => setProvider(e.target.value)} className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700">
+            <option value="gradio">Gradio search space</option>
+            <option value="tavily">Tavily</option>
+            <option value="custom">Custom search API</option>
+          </select>
+        </div>
+
+        {provider === 'gradio' && (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium mb-1">Space <span className="text-neutral-400">(owner/space-name)</span></label>
+              <input value={space} onChange={(e) => setSpace(e.target.value)} placeholder="mrdaaku/search-api" className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm font-mono dark:border-neutral-700" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">API key</label>
+              <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="paste the space key…" autoComplete="off" className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm font-mono dark:border-neutral-700" />
+            </div>
+          </div>
+        )}
+
+        {provider === 'tavily' && (
+          <div>
+            <label className="block text-xs font-medium mb-1">Tavily API key</label>
+            <input type="password" value={tavilyKey} onChange={(e) => setTavilyKey(e.target.value)} placeholder="tvly-…" autoComplete="off" className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm font-mono dark:border-neutral-700" />
+          </div>
+        )}
+
+        {provider === 'custom' && (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium mb-1">Base URL <span className="text-neutral-400">(GET {url}/search?q=…)</span></label>
+              <input value={customUrl} onChange={(e) => setCustomUrl(e.target.value)} placeholder="https://your-search-api.example" className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm font-mono dark:border-neutral-700" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">API key (optional)</label>
+              <input type="password" value={customKey} onChange={(e) => setCustomKey(e.target.value)} placeholder="optional" autoComplete="off" className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm font-mono dark:border-neutral-700" />
+            </div>
+          </div>
+        )}
+
+        <div className="border-t border-neutral-200 pt-4 dark:border-neutral-800">
+          <h4 className="text-sm font-semibold mb-3">Test</h4>
+          <div className="flex gap-2 mb-3">
+            <input value={testQuery} onChange={(e) => setTestQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runSearchTest()} placeholder="Test query" className="flex-1 rounded-lg border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700" />
+            <button onClick={runSearchTest} disabled={busy !== null} className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700">{busy === 'search' ? <Loader2 size={14} className="mx-auto animate-spin" /> : 'Test search'}</button>
+          </div>
+          <div className="flex gap-2">
+            <input value={fetchUrl} onChange={(e) => setFetchUrl(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runFetchTest()} placeholder="https://example.com" className="flex-1 rounded-lg border border-neutral-300 px-3 py-2 text-sm font-mono dark:border-neutral-700" />
+            <button onClick={runFetchTest} disabled={busy !== null} className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700">{busy === 'fetch' ? <Loader2 size={14} className="mx-auto animate-spin" /> : 'Test page fetch'}</button>
+          </div>
+          {testResult && <div className={`mt-3 rounded-lg p-3 text-sm ${testResult.ok ? 'bg-green-50 text-green-700 dark:bg-green-950/50 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300'}`}>{testResult.ok ? (typeof testResult.text === 'string' ? `Read ${testResult.host} · ${testResult.chars} chars` : `Search works · ${testResult.results?.length || 0} results`) : testResult.error}</div>}
+        </div>
+      </div>
+    </TabPanel>
+  )
+}
+
+function SearchBehaviorTab({ settings, onSave, onChange }) {
+  return (
+    <TabPanel dirty={false} onSave={() => {}}>
+      <div className="space-y-4 text-sm text-neutral-600 dark:text-neutral-400">
+        <p><strong>Auto mode:</strong> model calls tools (web_search, fetch_url) up to 5 rounds, then forced to answer. If tools not supported, a small JSON router call decides.</p>
+        <p><strong>Always mode:</strong> one search on every user message.</p>
+        <p><strong>Deep Research:</strong> planned sub-queries, searched one at a time with a pause between them.</p>
+        <p className="mt-4">All settings here are controlled by the backend constants. Edit <code className="font-mono bg-neutral-100 px-1 dark:bg-neutral-800">backend/main.py</code> to change limits (iterations, timeouts, etc.).</p>
+      </div>
+    </TabPanel>
+  )
+}
+
+function ExportImportTab({ settings, onSave, onChange }) {
+  const [importFile, setImportFile] = useState(null)
+  const [importResult, setImportResult] = useState(null)
+
+  const exportAll = () => {
+    const blob = new Blob([JSON.stringify({ settings, chats: [], messages: [], artifacts: [] }, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = `openbin-backup-${new Date().toISOString().slice(0,10)}.json`; a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
+  const handleImport = async (e) => {
+    const file = e.target.files[0]; if (!file) return
+    const text = await file.text()
+    try {
+      const data = JSON.parse(text)
+      if (data.settings) { await api.saveSettings(data.settings); onChange(data.settings) }
+      if (data.chats) { for (const c of data.chats) { await api.createChat(); /* simplified */ } }
+      setImportResult({ ok: true, msg: 'Imported successfully' })
+    } catch (err) { setImportResult({ ok: false, error: err.message }) }
+    setImportFile(null); e.target.value = ''
+  }
+
+  return (
+    <TabPanel dirty={false} onSave={() => {}}>
+      <div className="space-y-4">
+        <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+          <h4 className="text-sm font-semibold mb-3">Export all data</h4>
+          <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-3">Downloads a JSON file with settings, chats, messages, and artifacts.</p>
+          <button onClick={exportAll} className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium hover:bg-neutral-100 dark:border-neutral-700">Export JSON</button>
+        </div>
+        <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+          <h4 className="text-sm font-semibold mb-3">Import data</h4>
+          <p className="text-sm text-neutral-600 dark:text-neutral-400 mb-3">Select a previously exported JSON file.</p>
+          <input type="file" accept=".json" onChange={handleImport} className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700" />
+          {importResult && <div className={`mt-3 rounded-lg p-3 text-sm ${importResult.ok ? 'bg-green-50 text-green-700 dark:bg-green-950/50 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300'}`}>{importResult.ok ? importResult.msg : importResult.error}</div>}
+        </div>
+      </div>
+    </TabPanel>
+  )
+}
+
+// ============================================================
+// Shared UI pieces
+// ============================================================
+
+function TabPanel({ dirty, onSave, children }) {
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6">{children}</div>
+      <div className="border-t border-neutral-200 p-4 lg:p-6 dark:border-neutral-800">
+        <button onClick={onSave} disabled={!dirty} className="rounded-lg bg-neutral-900 px-6 py-2.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed dark:bg-white dark:text-neutral-900">
+          <Save size={14} className="mr-1.5" /> Save changes
+        </button>
+        {dirty && <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">You have unsaved changes.</p>}
+      </div>
+    </div>
+  )
+}
+
+// ============================================================
+// Tab component map (avoids eval warning)
+// ============================================================
+const TAB_COMPONENTS = {
+  AppearanceTab,
+  AboutTab,
+  ProvidersTab,
+  ModelsTab,
+  DefaultsTab,
+  SystemPromptTab,
+  GenerationTab,
+  SearchProvidersTab,
+  SearchBehaviorTab,
+  ExportImportTab,
+}
+
+// ============================================================
+// Main Settings Page
+// ============================================================
+
+export default function SettingsPage({ onClose }) {
+  const [settings, setSettings] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [hash, setHash] = useState(parseHash())
+  const [mobileCatOpen, setMobileCatOpen] = useState(false)
+
+  // Keep hash in sync with browser back/forward
+  useEffect(() => {
+    const onHash = () => setHash(parseHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  const navigate = (cat, tab) => {
+    location.hash = `/settings/${cat}/${tab}`
+  }
+
+  const loadSettings = async () => {
+    const data = await api.getSettings()
+    setSettings(data)
+    setLoading(false)
+  }
+
+  useEffect(() => { loadSettings() }, [])
+
+  const handleSave = async (patch) => {
+    const next = { ...settings, ...patch }
+    await api.saveSettings(next)
+    setSettings(next)
+  }
+
+  const handleChange = (patch) => setSettings((s) => ({ ...s, ...patch }))
+
+  const activeCat = CATEGORIES.find((c) => c.id === hash.cat) || CATEGORIES[0]
+  const activeTab = findTab(hash.cat, hash.tab) || activeCat.tabs[0]
+  const TabComp = TAB_COMPONENTS[activeTab.component]
+
+  if (loading) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Loader2 size={24} className="animate-spin text-neutral-500" />
+      </div>
+    )
+  }
+
+  if (!TabComp) {
+    return <div className="flex h-full items-center justify-center text-red-600">Unknown tab</div>
+  }
+
+  return (
+    <div className="flex h-full min-w-0 bg-white dark:bg-neutral-950">
+      {/* Left sidebar — categories */}
+      <aside className="hidden lg:flex lg:flex-col w-56 border-r border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900">
+        <div className="flex items-center justify-between h-14 px-4 border-b border-neutral-200 dark:border-neutral-800">
+          <h3 className="text-sm font-semibold">Settings</h3>
+          <button onClick={onClose} className="rounded-lg p-1.5 text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-800" aria-label="Back to chat"><ArrowLeft size={16} /></button>
+        </div>
+        <nav className="flex-1 overflow-y-auto p-2 space-y-1">
+          {CATEGORIES.map((cat) => (
+            <button
+              key={cat.id}
+              onClick={() => navigate(cat.id, cat.tabs[0].id)}
+              className={`w-full flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium transition ${hash.cat === cat.id ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900' : 'text-neutral-600 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:bg-neutral-800'}`}
+            >
+              <cat.icon size={16} className="shrink-0" />
+              {cat.label}
+            </button>
+          ))}
+        </nav>
+        <div className="p-2 border-t border-neutral-200 dark:border-neutral-800">
+          <button onClick={onClose} className="w-full flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:bg-neutral-800"><ArrowLeft size={16} /> Back to chat</button>
+        </div>
+      </aside>
+
+      {/* Mobile category bar */}
+      <div className="lg:hidden border-b border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900">
+        <div className="flex items-center justify-between h-12 px-3">
+          <button onClick={onClose} className="rounded-lg p-1.5 text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-800"><ArrowLeft size={18} /></button>
+          <h3 className="text-sm font-semibold flex-1 text-center">Settings</h3>
+          <button onClick={() => setMobileCatOpen(!mobileCatOpen)} className="rounded-lg p-1.5 text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-800"><ChevronDown size={18} /></button>
+        </div>
+        {mobileCatOpen && (
+          <div className="px-3 pb-3 space-y-1">
+            {CATEGORIES.map((cat) => (
+              <button key={cat.id} onClick={() => { navigate(cat.id, cat.tabs[0].id); setMobileCatOpen(false) }} className={`w-full flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium ${hash.cat === cat.id ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900' : 'text-neutral-600 hover:bg-neutral-200 dark:text-neutral-400 dark:hover:bg-neutral-800'}`}>
+                <cat.icon size={16} /> {cat.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Right content — tabs */}
+      <main className="flex-1 flex flex-col min-w-0">
+        {/* Sub-tabs header */}
+        <div className="flex items-center gap-1 border-b border-neutral-200 px-4 lg:px-6 dark:border-neutral-800 overflow-x-auto scroll-slim">
+          {activeCat.tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => navigate(activeCat.id, tab.id)}
+              className={`shrink-0 rounded-t-lg px-3 py-2 text-sm font-medium transition ${hash.tab === tab.id ? 'bg-white text-neutral-900 border-b-2 border-neutral-900 dark:bg-neutral-900 dark:text-white dark:border-white' : 'text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'}`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab panel */}
+        <TabComp settings={settings} onSave={handleSave} onChange={handleChange} />
+      </main>
+    </div>
+  )
+}

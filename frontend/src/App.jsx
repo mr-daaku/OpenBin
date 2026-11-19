@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar.jsx'
 import ChatWindow from './components/ChatWindow.jsx'
-import SettingsModal from './components/SettingsModal.jsx'
+import SettingsPage from './components/SettingsPage.jsx'
 import { api } from './api.js'
 import useChat from './useChat.js'
 
@@ -11,7 +11,7 @@ function applyTheme(theme) {
 
 export default function App() {
   const [settings, setSettings] = useState(null)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsPage, setSettingsPage] = useState(false)
   const [chats, setChats] = useState([])
   const [activeId, setActiveId] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -65,7 +65,7 @@ export default function App() {
     return () => clearTimeout(t)
   }, [query])
 
-  // First launch: load settings + chats, open Settings when no API key yet.
+  // First launch: load settings + chats, open Settings page at Providers when no API key yet.
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -83,7 +83,10 @@ export default function App() {
           setChats([chat])
           setActiveId(chat.id)
         }
-        if (!st.has_api_key) setSettingsOpen(true)
+        if (!st.has_api_key) {
+          setSettingsPage(true)
+          location.hash = '/settings/providers/providers'
+        }
       } catch (err) {
         if (alive) setFatal(err.message)
       } finally {
@@ -174,7 +177,7 @@ export default function App() {
   const handleSettingsSaved = (saved, opts = {}) => {
     setSettings(saved)
     applyTheme(saved.theme)
-    if (!opts.keepOpen) setSettingsOpen(false)
+    if (!opts.keepOpen) setSettingsPage(false)
     refreshChats()
   }
 
@@ -276,7 +279,6 @@ export default function App() {
         onDelete={handleDelete}
         onTogglePin={handleTogglePin}
         onImport={handleImport}
-        onOpenSettings={() => setSettingsOpen(true)}
         onClose={() => setSidebarOpen(false)}
       />
 
@@ -313,10 +315,13 @@ export default function App() {
         />
       </main>
 
-      {settingsOpen && settings && (
-        <SettingsModal
+      {settingsPage && settings && (
+        <SettingsPage
           settings={settings}
-          onClose={() => setSettingsOpen(false)}
+          onClose={() => {
+            setSettingsPage(false)
+            location.hash = ''
+          }}
           onSaved={handleSettingsSaved}
         />
       )}
