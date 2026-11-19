@@ -51,6 +51,8 @@ export const api = {
   testSearch: (query) => request('/api/search/test', { method: 'POST', body: JSON.stringify({ query }) }),
   testFetch: (url) => request('/api/fetch/test', { method: 'POST', body: JSON.stringify({ url }) }),
 
+  generateImage: (providerId, model, prompt, size, n) => request(`/api/providers/${providerId}/image`, { method: 'POST', body: JSON.stringify({ model, prompt, size, n }) }),
+
   uploadFile: async (file, chatId) => {
     const fd = new FormData()
     fd.append('file', file)

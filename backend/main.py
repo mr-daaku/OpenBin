@@ -19,6 +19,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import openai
+import httpx
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from openai import AsyncOpenAI
@@ -145,6 +146,9 @@ def init_db() -> None:
             "ALTER TABLE messages ADD COLUMN sources TEXT",
             "ALTER TABLE messages ADD COLUMN steps TEXT",
             "ALTER TABLE model_caps ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))",
+            "ALTER TABLE files ADD COLUMN generated INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE providers ADD COLUMN img_endpoint TEXT NOT NULL DEFAULT '/images/generations'",
+            "ALTER TABLE providers ADD COLUMN img_response_style TEXT NOT NULL DEFAULT 'openai'",
         ):
             try:
                 conn.execute(stmt)
@@ -347,6 +351,8 @@ def public_provider(p: sqlite3.Row) -> dict:
         "has_api_key": bool(p["api_key"]),
         "pinned": [m for m in (p["pinned"] or "").split(",") if m],
         "is_active": bool(p["is_active"]),
+        "img_endpoint": p["img_endpoint"] or "/images/generations",
+        "img_response_style": p["img_response_style"] or "openai",
     }
 
 
@@ -488,6 +494,9 @@ class ProviderIn(BaseModel):
     preset: str | None = None
     base_url: str | None = None
     api_key: str | None = None
+    # Image generation settings
+    img_endpoint: str | None = None       # default /images/generations
+    img_response_style: str | None = None # 'openai' | 'nvidia' | 'custom'
 
 
 class PinnedIn(BaseModel):
@@ -507,14 +516,16 @@ def create_provider(body: ProviderIn):
     key = (body.api_key or "").strip()
     if key and "****" in key:
         key = ""
+    img_endpoint = (body.img_endpoint or "").strip() or "/images/generations"
+    img_response_style = (body.img_response_style or "").strip() or "openai"
     conn = connect()
     try:
         with conn:
             first = conn.execute("SELECT COUNT(*) AS n FROM providers").fetchone()["n"] == 0
             cur = conn.execute(
-                "INSERT INTO providers (name, preset, base_url, api_key, is_active) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (name[:60], preset, base_url, key, 1 if first else 0),
+                "INSERT INTO providers (name, preset, base_url, api_key, is_active, img_endpoint, img_response_style) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (name[:60], preset, base_url, key, 1 if first else 0, img_endpoint, img_response_style),
             )
             if not first:
                 conn.execute("UPDATE providers SET is_active = 0 WHERE id <> ?", (cur.lastrowid,))
@@ -540,6 +551,10 @@ def update_provider(provider_id: int, body: ProviderIn):
             updates["base_url"] = body.base_url.strip()
         if body.api_key and "****" not in body.api_key:
             updates["api_key"] = body.api_key.strip()
+        if body.img_endpoint is not None:
+            updates["img_endpoint"] = body.img_endpoint.strip() or "/images/generations"
+        if body.img_response_style is not None:
+            updates["img_response_style"] = body.img_response_style.strip() or "openai"
         if updates:
             with conn:
                 conn.execute(
@@ -802,6 +817,86 @@ async def provider_test(provider_id: int, body: SettingsIn):
         return {"ok": False, "error": "Request timed out. Check the base URL and your connection."}
     except Exception as exc:  # noqa: BLE001 - the exact error is the point here
         return {"ok": False, "error": exact_error(exc)}
+
+
+class ImageGenIn(BaseModel):
+    model: str
+    prompt: str
+    size: str | None = None  # e.g. "1024x1024", "1024x1792", "1792x1024"
+    n: int = 1
+
+
+@app.post("/api/providers/{provider_id}/image")
+async def provider_image(provider_id: int, body: ImageGenIn):
+    st = load_settings()
+    provider = load_provider(provider_id)
+    if provider is None:
+        return JSONResponse({"ok": False, "error": "Provider not found."}, status_code=404)
+    base_url, key = provider_creds(provider, st)
+    if not key:
+        return JSONResponse({"ok": False, "error": "No API key set for this provider."}, status_code=400)
+    if not base_url:
+        return JSONResponse({"ok": False, "error": "No base URL set for this provider."}, status_code=400)
+
+    endpoint = provider["img_endpoint"] or "/images/generations"
+    response_style = provider["img_response_style"] or "openai"
+    url = base_url.rstrip("/") + endpoint
+
+    # Validate model is image-gen capable
+    caps = get_model_caps(provider_id, body.model)
+    if not caps.get("image_gen"):
+        return JSONResponse({"ok": False, "error": "Selected model does not support image generation."}, status_code=400)
+
+    payload = {"model": body.model, "prompt": body.prompt, "n": min(max(body.n, 1), 4)}
+    if body.size:
+        payload["size"] = body.size
+
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=120.0) as http:
+        try:
+            res = await http.post(url, json=payload, headers=headers)
+            res.raise_for_status()
+            data = res.json()
+        except httpx.TimeoutException:
+            return JSONResponse({"ok": False, "error": "Image generation timed out (120s)."}, status_code=504)
+        except httpx.HTTPStatusError as exc:
+            return JSONResponse({"ok": False, "error": f"Provider error: {exc.response.status_code} {exc.response.text}"}, status_code=502)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": exact_error(exc)}, status_code=500)
+
+    # Parse response - support multiple formats
+    images = []
+    try:
+        if response_style == "openai":
+            # OpenAI style: { data: [{ b64_json: "...", url: "..." }, ...] }
+            for item in data.get("data", []):
+                if item.get("b64_json"):
+                    images.append({"b64": item["b64_json"]})
+                elif item.get("url"):
+                    images.append({"url": item["url"]})
+        elif response_style == "nvidia":
+            # NVIDIA style: { artifacts: [{ base64: "..." }, ...] }
+            for item in data.get("artifacts", []):
+                if item.get("base64"):
+                    images.append({"b64": item["base64"]})
+        else:
+            # Generic fallback
+            for item in data.get("data", []) or data.get("artifacts", []) or data.get("images", []):
+                if item.get("b64_json"):
+                    images.append({"b64": item["b64_json"]})
+                elif item.get("url"):
+                    images.append({"url": item["url"]})
+                elif item.get("base64"):
+                    images.append({"b64": item["base64"]})
+                elif item.get("image"):
+                    images.append({"b64": item["image"]})
+    except Exception:
+        pass
+
+    if not images:
+        return JSONResponse({"ok": False, "error": "No images returned by provider."}, status_code=500)
+
+    return {"ok": True, "images": images, "model": body.model, "prompt": body.prompt}
 
 
 # ---------------------------------------------------------------- chats api

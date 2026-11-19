@@ -127,19 +127,56 @@ function ActionButton({ onClick, label, children, danger }) {
   )
 }
 
-function Attachments({ files }) {
+function Attachments({ files, onRegenerate }) {
   if (!files?.length) return null
   return (
     <div className="mb-1.5 flex flex-wrap gap-2">
       {files.map((f) =>
         f.kind === 'image' && f.url ? (
-          <a key={f.id} href={f.url} target="_blank" rel="noreferrer">
-            <img
-              src={f.url}
-              alt={f.name}
-              className="max-h-40 max-w-[240px] rounded-xl border border-neutral-200 object-cover dark:border-neutral-700"
-            />
-          </a>
+          <div key={f.id} className="relative group">
+            <a href={f.url} target="_blank" rel="noreferrer">
+              <img
+                src={f.url}
+                alt={f.name}
+                className="max-h-40 max-w-[240px] rounded-xl border border-neutral-200 object-cover dark:border-neutral-700"
+              />
+            </a>
+            {f.generated && onRegenerate && (
+              <div className="absolute bottom-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRegenerate(f.id) }}
+                  className="rounded-lg bg-white/90 p-1.5 hover:bg-white dark:bg-neutral-800/90 dark:hover:bg-neutral-700"
+                  title="Regenerate"
+                >
+                  <RefreshCw size={12} />
+                </button>
+                <button
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); navigator.clipboard.writeText(f.url) }}
+                  className="rounded-lg bg-white/90 p-1.5 hover:bg-white dark:bg-neutral-800/90 dark:hover:bg-neutral-700"
+                  title="Copy link"
+                >
+                  <Copy size={12} />
+                </button>
+                <a
+                  href={f.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-lg bg-white/90 p-1.5 hover:bg-white dark:bg-neutral-800/90 dark:hover:bg-neutral-700"
+                  title="Open full-size"
+                >
+                  <ExternalLink size={12} />
+                </a>
+                <a
+                  href={f.url}
+                  download={f.name}
+                  className="rounded-lg bg-white/90 p-1.5 hover:bg-white dark:bg-neutral-800/90 dark:hover:bg-neutral-700"
+                  title="Download"
+                >
+                  <Download size={12} />
+                </a>
+              </div>
+            )}
+          </div>
         ) : (
           <a
             key={f.id}
@@ -211,7 +248,7 @@ export default function Message({
           </div>
         )}
         <div className="max-w-[85%] rounded-3xl bg-neutral-200 px-4 py-2.5 text-[15px] leading-7 whitespace-pre-wrap break-words dark:bg-neutral-800">
-          <Attachments files={message.files} />
+          <Attachments files={message.files} onRegenerate={onRegenerate} />
           {message.content}
         </div>
       </div>

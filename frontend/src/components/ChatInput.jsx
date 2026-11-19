@@ -47,6 +47,35 @@ export default function ChatInput({
 
   const hasVision = !!modelCaps.vision
   const isImageGenOnly = !!modelCaps.image_gen && !modelCaps.vision && !modelCaps.tools
+  const isImageGen = !!modelCaps.image_gen
+
+  // Image generation mode state
+  const [imgMode, setImgMode] = useState(false)
+  const [imgSize, setImgSize] = useState('1024x1024')
+  const [imgCount, setImgCount] = useState(1)
+  const [imgPrompt, setImgPrompt] = useState('')
+  const [imgBusy, setImgBusy] = useState(false)
+  const [imgError, setImgError] = useState(null)
+
+  const SIZE_PRESETS = [
+    { label: 'Square', value: '1024x1024' },
+    { label: 'Portrait', value: '1024x1792' },
+    { label: 'Landscape', value: '1792x1024' },
+  ]
+
+  // Auto-switch to image mode when model has image_gen capability
+  useEffect(() => {
+    if (isImageGen && !isImageGenOnly) {
+      // Only auto-enable if user hasn't explicitly disabled it
+      // We'll track this with a ref or just enable on model change
+    }
+  }, [model, isImageGen, isImageGenOnly])
+
+  const toggleImgMode = () => {
+    if (!isImageGen) return
+    setImgMode((v) => !v)
+    if (!imgMode) setImgPrompt(value)
+  }
 
   // Auto-grow (up to a comfortable cap) and keep focus after each send.
   useEffect(() => {
@@ -134,7 +163,40 @@ export default function ChatInput({
   const failed = files.some((f) => f.error)
   const ready = files.filter((f) => f.id && !f.error)
 
-  const submit = () => {
+  const submit = async () => {
+    if (imgMode) {
+      // Image generation mode
+      const prompt = imgPrompt.trim() || value.trim()
+      if (!prompt || imgBusy || streaming) return
+      setImgBusy(true)
+      setImgError(null)
+      try {
+        // Find active provider
+        const providers = await api.listProviders()
+        const active = providers.find((p) => p.is_active) || providers[0]
+        if (!active) throw new Error('No active provider')
+        const res = await api.generateImage(active.id, model, prompt, imgSize, imgCount)
+        if (!res.ok) throw new Error(res.error || 'Image generation failed')
+        // Send as a special message with generated images
+        onSend(`[generated image: ${prompt}]`, res.images.map((img, i) => ({
+          id: `gen-${Date.now()}-${i}`,
+          name: `generated-${i + 1}.png`,
+          kind: 'image',
+          url: img.b64 ? `data:image/png;base64,${img.b64}` : img.url,
+          generated: true,
+        })))
+        setImgPrompt('')
+        setValue('')
+        onDraftChange?.('')
+      } catch (err) {
+        setImgError(err.message)
+      } finally {
+        setImgBusy(false)
+      }
+      return
+    }
+
+    // Normal chat mode
     const text = value.trim()
     if (streaming || uploading) return
     if (!text && ready.length === 0) return
@@ -152,7 +214,9 @@ export default function ChatInput({
     submit()
   }
 
-  const canSend = (!!value.trim() || ready.length > 0) && !uploading && !failed
+  const canSend = imgMode
+    ? (!!imgPrompt.trim() || !!value.trim()) && !imgBusy && !streaming
+    : (!!value.trim() || ready.length > 0) && !uploading && !failed && !streaming
 
   const currentMode = SEARCH_MODES.find((m) => m.id === searchMode) || SEARCH_MODES[1]
   const CurrentIcon = currentMode.icon
@@ -270,16 +334,39 @@ export default function ChatInput({
           )}
         </div>
         <ModelPicker model={model} onPick={onModelChange} defaultModel={defaultModel} />
-        <textarea
-          ref={ref}
-          rows={1}
-          value={value}
-          onChange={change}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          placeholder="Message OpenBin"
-          className="scroll-slim max-h-[200px] min-h-[40px] min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-[15px] leading-6 outline-none placeholder:text-neutral-400 dark:placeholder:text-neutral-500"
-        />
+        {imgMode ? (
+          <textarea
+            ref={ref}
+            rows={1}
+            value={imgPrompt}
+            onChange={(e) => setImgPrompt(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Describe the image you want to generate…"
+            className="scroll-slim max-h-[200px] min-h-[40px] min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-[15px] leading-6 outline-none placeholder:text-neutral-400 dark:placeholder:text-neutral-500"
+          />
+        ) : (
+          <textarea
+            ref={ref}
+            rows={1}
+            value={value}
+            onChange={change}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            placeholder="Message OpenBin"
+            className="scroll-slim max-h-[200px] min-h-[40px] min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-[15px] leading-6 outline-none placeholder:text-neutral-400 dark:placeholder:text-neutral-500"
+          />
+        )}
+        {imgError && (
+          <div className="mb-2 flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300" role="alert">
+            <AlertTriangle size={14} className="shrink-0" />
+            <span>{imgError}</span>
+          </div>
+        )}
+        {imgMode && !streaming && !imgBusy && (
+          <div className="mb-2 flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">
+            <span>Image mode — {imgCount} image{imgCount > 1 ? 's' : ''} at {imgSize}</span>
+          </div>
+        )}
         {streaming ? (
           <button
             onClick={onStop}
@@ -290,15 +377,43 @@ export default function ChatInput({
             <Square size={14} fill="currentColor" />
           </button>
         ) : (
-          <button
-            onClick={submit}
-            disabled={!canSend}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white transition hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-30 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
-            aria-label="Send message"
-            title="Send"
-          >
-            <ArrowUp size={18} />
-          </button>
+          <>
+            {isImageGen && !isImageGenOnly && (
+              <button
+                onClick={toggleImgMode}
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition ${imgMode
+                  ? 'bg-blue-600 text-white hover:bg-blue-700'
+                  : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700'}`}
+                aria-label={imgMode ? 'Switch to chat mode' : 'Switch to image generation mode'}
+                title={imgMode ? 'Switch to chat mode' : 'Switch to image generation mode'}
+              >
+                {imgMode ? (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                ) : (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                )}
+              </button>
+            )}
+            {imgMode && (
+              <div className="flex items-center gap-1.5 px-2 py-1.5 bg-blue-50 rounded-xl border border-blue-200 dark:bg-blue-950/30 dark:border-blue-800">
+                <select value={imgSize} onChange={(e) => setImgSize(e.target.value)} className="rounded-lg border border-neutral-300 px-2 py-1 text-xs font-mono bg-white dark:border-neutral-700 dark:bg-neutral-800">
+                  {SIZE_PRESETS.map((s) => <option key={s.value} value={s.value}>{s.label} ({s.value})</option>)}
+                </select>
+                <select value={imgCount} onChange={(e) => setImgCount(Number(e.target.value))} className="rounded-lg border border-neutral-300 px-2 py-1 text-xs bg-white dark:border-neutral-700 dark:bg-neutral-800">
+                  {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+            )}
+            <button
+              onClick={submit}
+              disabled={!canSend}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white transition hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-30 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
+              aria-label={imgMode ? 'Generate images' : 'Send message'}
+              title={imgMode ? 'Generate images' : 'Send'}
+            >
+              {imgMode ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg> : <ArrowUp size={18} />}
+            </button>
+          </>
         )}
       </div>
     </div>

@@ -130,11 +130,11 @@ function ProvidersTab({ settings, onSave, onChange }) {
     return () => { alive = false }
   }, [])
 
-  const resetForm = () => setForm({ name: '', preset: 'custom', base_url: '', api_key: '' })
+  const resetForm = () => setForm({ name: '', preset: 'custom', base_url: '', api_key: '', img_endpoint: '/images/generations', img_response_style: 'openai' })
 
   const startEdit = (p) => {
     setEditing(p.id)
-    setForm({ name: p.name, preset: p.preset, base_url: p.base_url, api_key: p.api_key })
+    setForm({ name: p.name, preset: p.preset, base_url: p.base_url, api_key: p.api_key, img_endpoint: p.img_endpoint || '/images/generations', img_response_style: p.img_response_style || 'openai' })
   }
 
   const cancelEdit = () => { setEditing(null); resetForm() }
@@ -233,6 +233,23 @@ function ProvidersTab({ settings, onSave, onChange }) {
             <div>
               <label className="block text-xs font-medium mb-1">API key <span className="text-neutral-400">(masked after save)</span></label>
               <input type="password" value={form.api_key} onChange={(e) => setForm({...form, api_key: e.target.value})} placeholder="sk-… or leave empty to keep existing" autoComplete="off" className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm font-mono dark:border-neutral-700" />
+            </div>
+            <div className="border-t border-neutral-200 pt-3 dark:border-neutral-800">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400 mb-2">Image generation</h4>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-medium mb-1">Endpoint <span className="text-neutral-400">(appended to base URL)</span></label>
+                  <input value={form.img_endpoint} onChange={(e) => setForm({...form, img_endpoint: e.target.value})} placeholder="/images/generations" className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm font-mono dark:border-neutral-700" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1">Response style</label>
+                  <select value={form.img_response_style} onChange={(e) => setForm({...form, img_response_style: e.target.value})} className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700">
+                    <option value="openai">OpenAI (data[].b64_json / url)</option>
+                    <option value="nvidia">NVIDIA (artifacts[].base64)</option>
+                    <option value="custom">Auto-detect (try all)</option>
+                  </select>
+                </div>
+              </div>
             </div>
           </div>
           <div className="mt-4 flex gap-2">

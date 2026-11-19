@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS files (
     size INTEGER NOT NULL DEFAULT 0,
     path TEXT NOT NULL,
     extracted TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    generated INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_message_id ON files (message_id);
@@ -42,6 +43,8 @@ CREATE TABLE IF NOT EXISTS providers (
     api_key TEXT NOT NULL DEFAULT '',
     pinned TEXT NOT NULL DEFAULT '',
     is_active INTEGER NOT NULL DEFAULT 0,
+    img_endpoint TEXT NOT NULL DEFAULT '/images/generations',
+    img_response_style TEXT NOT NULL DEFAULT 'openai',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
