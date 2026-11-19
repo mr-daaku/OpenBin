@@ -66,6 +66,7 @@ When the user asks for something substantial and self-contained that they will w
 Rules for artifacts:
 - html: ONE complete self-contained file (HTML + CSS + JS together). No external files. CDN scripts only from cdnjs.cloudflare.com or cdn.jsdelivr.net.
 - react: a single component with a default export, using only React and Tailwind classes. Do not use localStorage or sessionStorage.
+- Never wrap the artifact content in markdown code fences (```); send the raw content directly.
 - Always give complete working code, never placeholders like "rest of the code here".
 - When updating an existing artifact, send the full updated artifact again, not only the changed part.
 - Make the design clean, modern and responsive by default.
@@ -106,10 +107,13 @@ DEFAULTS = {
     "search_custom_key": "",
 }
 
-# SHA-256 of the built-in system prompt as it shipped before web tools existed.
-# A stored prompt matching it byte-for-byte is the untouched default, so it is
-# dropped (never a user's own text) and the current default takes over.
-OLD_DEFAULT_PROMPT_SHA = "6a7c42fd949f419e5e12024dd2dbba8ccf6592da609f71f94331b24e2171fb47"
+# SHA-256 of earlier built-in system prompts. A stored prompt matching one of
+# these byte-for-byte is the untouched default (never a user's own text), so it
+# is dropped and the current default takes over. Anything else is left alone.
+OLD_DEFAULT_PROMPT_SHAS = {
+    "6a7c42fd949f419e5e12024dd2dbba8ccf6592da609f71f94331b24e2171fb47",  # pre-web-tools
+    "36f3c6397b1450855d9047eecead02d53766d3034a6fab41cdd645f50a83d420",  # web-tools default (v0.1.7)
+}
 
 app = FastAPI(title="OpenBin")
 
@@ -148,13 +152,13 @@ def init_db() -> None:
         # One-time migration: an old DB may hold an empty system_prompt, which
         # would shadow the new default. Drop only that empty row (never data).
         conn.execute("DELETE FROM settings WHERE key = 'system_prompt' AND value = ''")
-        # One-time migration: a stored prompt that is byte-identical to the old
-        # built-in default is not user text - drop it so the new default (web
-        # tools + safety rules) applies. Anything else is left alone.
+        # One-time migration: a stored prompt that is byte-identical to an old
+        # built-in default is not user text - drop it so the current default
+        # applies. Anything else is left alone.
         row = conn.execute("SELECT value FROM settings WHERE key = 'system_prompt'").fetchone()
         if row and row["value"] and hashlib.sha256(
             row["value"].encode("utf-8")
-        ).hexdigest() == OLD_DEFAULT_PROMPT_SHA:
+        ).hexdigest() in OLD_DEFAULT_PROMPT_SHAS:
             conn.execute("DELETE FROM settings WHERE key = 'system_prompt'")
         # One-time migration: turn the original single credential into a provider
         # profile so nothing the user already entered is lost.

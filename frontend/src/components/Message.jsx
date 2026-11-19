@@ -2,20 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Check, ChevronDown, Copy, ExternalLink, FileText, Globe, Info, Loader2, Pencil, RefreshCw, Search, Sparkles, Trash2, TriangleAlert, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
 import { extractArtifacts } from '../artifacts.js'
-
-// Only a handful of languages are registered to keep the bundle small.
-import javascript from 'highlight.js/lib/languages/javascript'
-import typescript from 'highlight.js/lib/languages/typescript'
-import python from 'highlight.js/lib/languages/python'
-import bash from 'highlight.js/lib/languages/bash'
-import json from 'highlight.js/lib/languages/json'
-import xml from 'highlight.js/lib/languages/xml'
-import css from 'highlight.js/lib/languages/css'
-import sql from 'highlight.js/lib/languages/sql'
-
-const LANGUAGES = { javascript, typescript, python, bash, json, xml, css, sql }
+import { loadRehype } from '../highlight.js'
 
 // Math support is optional and heavy - only pull it in if a message actually
 // uses $...$ / $$...$$, and only once per session.
@@ -29,6 +17,23 @@ function loadMath() {
     ]).then(([remark, rehype]) => ({ remark: remark.default, rehype: rehype.default }))
   }
   return mathPromise
+}
+
+// Syntax highlighting (highlight.js + a small language set) loads once, only
+// when a message actually contains a code block.
+function useHighlight(active) {
+  const [hl, setHl] = useState(null)
+  useEffect(() => {
+    if (!active) return
+    let alive = true
+    loadRehype()
+      .then((p) => alive && setHl(p))
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [active])
+  return hl
 }
 
 const MATH_RE = /(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|(?<!\\)\$(?!\s)[^$\n]+?(?<!\s)(?<!\\)\$)/
@@ -409,8 +414,14 @@ function ArtifactChips({ artifacts, onOpen }) {
 function MarkdownBody({ content, onOpenArtifact }) {
   const { text, artifacts } = useMemo(() => extractArtifacts(content), [content])
   const math = useMathPlugins(MATH_RE.test(text))
+  const hl = useHighlight(/```/.test(text))
   const plugins = [remarkGfm]
-  const rehype = [[rehypeHighlight, { languages: LANGUAGES, detect: false }]]
+  const rehype = []
+  if (hl) {
+    // detect: guesses the language for fences without a hint, but only
+    // among the languages this app registers.
+    rehype.push([hl.rehypeHighlight, { languages: hl.languages, detect: true }])
+  }
   if (math) {
     plugins.push(math.remark)
     rehype.push([math.rehype, { throwOnError: false }])

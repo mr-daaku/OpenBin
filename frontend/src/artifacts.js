@@ -3,16 +3,36 @@
 
 const ARTIFACT_RE = /<artifact\s+type="([^"]*)"\s+title="([^"]*)">([\s\S]*?)<\/artifact>/g
 
+// Models like to wrap the whole artifact body in one markdown code fence.
+// Strip it (preview, Code tab, copy and download should never show it) and
+// keep the fence's language hint - it is the only hint a type="code" body
+// has about what language it is written in.
+function stripFences(raw) {
+  const text = String(raw || '').replace(/^\n+|\n+$/g, '')
+  const lines = text.split('\n')
+  const open = /^```([A-Za-z0-9+#-]*)\s*$/.exec(lines[0].trim())
+  if (!open) return { body: text, hint: '' }
+  const hint = (open[1] || '').toLowerCase()
+  const last = lines.length - 1
+  if (lines[last].trim() === '```') {
+    return { body: lines.slice(1, last).join('\n'), hint }
+  }
+  // Opening fence with no closing one: drop just that line.
+  return { body: lines.slice(1).join('\n'), hint }
+}
+
 export function extractArtifacts(content) {
   const text = String(content || '')
   const artifacts = []
   let match
   ARTIFACT_RE.lastIndex = 0
   while ((match = ARTIFACT_RE.exec(text)) !== null) {
+    const { body, hint } = stripFences(match[3])
     artifacts.push({
       type: (match[1] || 'code').trim().toLowerCase(),
       title: (match[2] || 'Artifact').trim() || 'Artifact',
-      body: match[3].replace(/^\n+|\n+$/g, ''),
+      body,
+      lang: hint,
       start: match.index,
       end: ARTIFACT_RE.lastIndex,
     })

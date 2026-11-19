@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Check, Code, Copy, Download, ExternalLink, Eye, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { artifactFilename, downloadText } from '../artifacts.js'
+import { highlightCode, loadHljs } from '../highlight.js'
 
 function HtmlPreview({ body }) {
   // sandbox="allow-scripts" lets the artifact's own JS run, nothing else.
@@ -62,6 +63,27 @@ export default function ArtifactPanel({ artifact, onClose }) {
   }
 
   const body = useMemo(() => artifact.body, [artifact])
+
+  // Syntax highlighting loads only when the Code tab is actually shown.
+  const [hljs, setHljs] = useState(null)
+  useEffect(() => {
+    if (activeTab !== 'code' || hljs) return
+    let alive = true
+    loadHljs()
+      .then((h) => alive && setHljs(h))
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [activeTab, hljs])
+
+  // Language: the artifact type, except type="code" where the fence hint
+  // (kept by extractArtifacts) is the better guess - else auto-detect.
+  const hint = artifact.type === 'code' ? artifact.lang || '' : artifact.type
+  const marked = useMemo(
+    () => (hljs ? highlightCode(hljs, body, hint) : null),
+    [hljs, body, hint],
+  )
 
   return (
     <aside className="flex h-full w-full flex-col border-l border-neutral-200 bg-white md:w-[46%] md:max-w-[560px] dark:border-neutral-800 dark:bg-neutral-900">
@@ -135,9 +157,14 @@ export default function ArtifactPanel({ artifact, onClose }) {
           )
         ) : (
           <pre className="scroll-slim h-full overflow-auto bg-neutral-50 p-4 text-[13px] leading-6 dark:bg-neutral-950">
-            <code className={`language-${artifact.type === 'react' ? 'javascript' : artifact.type}`}>
-              {body}
-            </code>
+            {marked ? (
+              <code
+                className={`hljs language-${marked.lang}`}
+                dangerouslySetInnerHTML={{ __html: marked.html }}
+              />
+            ) : (
+              <code>{body}</code>
+            )}
           </pre>
         )}
       </div>
