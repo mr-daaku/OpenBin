@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUp, FileText, Loader2, Paperclip, Square, X } from 'lucide-react'
+import { ArrowUp, Brain, ChevronDown, FileText, Globe, GlobeOff, Loader2, Paperclip, Square, Telescope, X } from 'lucide-react'
 import { api } from '../api.js'
+
+// The four web-search modes. Auto is the default: the model (or the router
+// fallback when it has no tool support) decides whether a search is needed.
+export const SEARCH_MODES = [
+  { id: 'off', label: 'Off', icon: GlobeOff, hint: 'Never use the web' },
+  { id: 'auto', label: 'Auto', icon: Brain, hint: 'AI decides when to search' },
+  { id: 'always', label: 'Always', icon: Globe, hint: 'Search the web for every message' },
+  { id: 'research', label: 'Deep Research', icon: Telescope, hint: 'Multi-step research report' },
+]
+
+export const DEFAULT_SEARCH_MODE = 'auto'
 
 // Rough local estimate, no tokenizer downloaded: ~4 chars per token.
 export function estimateTokens(text) {
@@ -11,11 +22,21 @@ export function estimateTokens(text) {
 
 const ACCEPT = 'image/*,.pdf,.txt,.md,.markdown,.csv,.tsv,.json,.xml,.html,.htm,.css,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.cs,.go,.rs,.rb,.php,.sh,.bat,.ps1,.sql,.yaml,.yml,.toml,.ini,.cfg,.log,.srt'
 
-export default function ChatInput({ streaming, onSend, onStop, onDraftChange, chatId }) {
+export default function ChatInput({
+  streaming,
+  onSend,
+  onStop,
+  onDraftChange,
+  chatId,
+  searchMode = DEFAULT_SEARCH_MODE,
+  onSearchModeChange,
+}) {
   const [value, setValue] = useState('')
   const [files, setFiles] = useState([]) // {key, id, name, kind, url, uploading}
+  const [modeOpen, setModeOpen] = useState(false)
   const ref = useRef(null)
   const fileRef = useRef(null)
+  const modeRef = useRef(null)
   const keyRef = useRef(0)
 
   // Auto-grow (up to a comfortable cap) and keep focus after each send.
@@ -26,6 +47,16 @@ export default function ChatInput({ streaming, onSend, onStop, onDraftChange, ch
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
     if (!streaming) el.focus()
   }, [value, streaming])
+
+  // Close the search-mode menu when clicking anywhere else.
+  useEffect(() => {
+    if (!modeOpen) return
+    const onDown = (e) => {
+      if (modeRef.current && !modeRef.current.contains(e.target)) setModeOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [modeOpen])
 
   const change = (e) => {
     setValue(e.target.value)
@@ -80,6 +111,9 @@ export default function ChatInput({ streaming, onSend, onStop, onDraftChange, ch
   }
 
   const canSend = (!!value.trim() || ready.length > 0) && !uploading && !failed
+
+  const currentMode = SEARCH_MODES.find((m) => m.id === searchMode) || SEARCH_MODES[1]
+  const CurrentIcon = currentMode.icon
 
   return (
     <div className="rounded-3xl border border-neutral-300 bg-white p-2 shadow-sm transition focus-within:border-neutral-500 dark:border-neutral-700 dark:bg-neutral-900 dark:focus-within:border-neutral-500">
@@ -138,6 +172,55 @@ export default function ChatInput({ streaming, onSend, onStop, onDraftChange, ch
             e.target.value = ''
           }}
         />
+        <div className="relative mb-1 shrink-0" ref={modeRef}>
+          <button
+            onClick={() => setModeOpen((v) => !v)}
+            className="flex items-center gap-1 rounded-full border border-neutral-200 px-2 py-1.5 text-[11px] font-medium text-neutral-500 transition hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800"
+            title={`Web search: ${currentMode.hint}`}
+            aria-label={`Web search mode: ${currentMode.label}`}
+            aria-haspopup="menu"
+            aria-expanded={modeOpen}
+          >
+            <CurrentIcon size={13} />
+            <span className="hidden sm:inline">{currentMode.label}</span>
+            <ChevronDown size={12} className={`transition ${modeOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {modeOpen && (
+            <div
+              className="absolute bottom-full left-0 z-40 mb-2 w-60 rounded-xl border border-neutral-200 bg-white p-1.5 shadow-2xl dark:border-neutral-700 dark:bg-neutral-900"
+              role="menu"
+            >
+              {SEARCH_MODES.map(({ id, label, icon: Icon, hint }) => (
+                <button
+                  key={id}
+                  role="menuitemradio"
+                  aria-checked={searchMode === id}
+                  onClick={() => {
+                    onSearchModeChange?.(id)
+                    setModeOpen(false)
+                  }}
+                  className={`flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition ${
+                    searchMode === id
+                      ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900'
+                      : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                  }`}
+                >
+                  <Icon size={14} className="mt-0.5 shrink-0" />
+                  <span className="min-w-0">
+                    <span className="block text-xs font-medium">{label}</span>
+                    <span
+                      className={`block text-[10px] leading-4 ${
+                        searchMode === id ? 'opacity-70' : 'text-neutral-400 dark:text-neutral-500'
+                      }`}
+                    >
+                      {hint}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <textarea
           ref={ref}
           rows={1}

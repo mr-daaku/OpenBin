@@ -68,6 +68,7 @@ That is the only manual configuration — no `.env` editing anywhere.
 | Max tokens       | `1024`                                 |                                                  |
 | History limit    | `12`                                   | last N messages sent per request                 |
 | Theme            | `dark`                                 | dark / light                                     |
+| Web search       | Gradio space / Tavily / custom API     | Settings → Web search, with **Test search** and **Test page fetch** buttons |
 
 ## Project structure
 
@@ -91,6 +92,7 @@ OpenBin/
 │   └── vite.config.js
 ├── backend/
 │   ├── main.py
+│   ├── webtools.py
 │   ├── schema.sql
 │   ├── requirements.txt
 │   └── data/            (created automatically, git-ignored)
@@ -110,6 +112,30 @@ OpenBin/
 | DELETE   | `/api/chats/{id}`          | delete a chat (messages go with it)        |
 | GET      | `/api/chats/{id}/messages` | message history                            |
 | POST     | `/api/chats/{id}/stream`   | save the user message, stream the reply as SSE, save the reply (partial replies are saved if you press Stop) |
+| POST     | `/api/search/test`         | one test web search — Settings → **Test search** |
+| POST     | `/api/fetch/test`          | read one page as text (SSRF-guarded) — Settings → **Test page fetch** |
+| GET      | `/api/search?q=…&limit=6`  | direct search, returns `{results, errors}`       |
+
+## Web search
+
+The chat input has four modes (the choice is remembered per browser):
+
+| Mode                   | What happens                                                                 |
+| ---------------------- | ---------------------------------------------------------------------------- |
+| **Off**                | nothing is sent to the web                                                  |
+| **Auto** (default)     | the model decides. With tool support it calls `web_search` / `fetch_url` itself (max 5 rounds, then it must answer); otherwise a small JSON router call decides first. A failed search only shows a warning and the answer continues from the model's own knowledge |
+| **Always**             | one search on every message                                                 |
+| **Deep Research**      | planned sub-queries, searched one at a time with a pause between them       |
+
+- Live steps ("Searching: …", "Reading: domain.com", "Writing answer…") stream while the answer is
+  written, then collapse into **Sources & steps** under the message; sources show as title + domain cards.
+- Every request carries the current date and time in **your** timezone, so "today"/"latest" are correct.
+- `fetch_url` only accepts http/https and refuses localhost, private ranges (10.x, 172.16-31.x,
+  192.168.x), link-local and file:// URLs — checked before the request and again after every redirect.
+  Pages are capped at 1.5 MB, 15 s and 6000 characters.
+- Page text and search results are treated as **data, never instructions**.
+- An endpoint that rejects `tools` is remembered (per base URL + model) and switches to the router
+  path automatically.
 
 ## Notes
 

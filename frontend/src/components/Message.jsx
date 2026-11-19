@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, Copy, ExternalLink, FileText, Pencil, RefreshCw, Trash2, X } from 'lucide-react'
+import { Check, ChevronDown, Copy, ExternalLink, FileText, Globe, Info, Loader2, Pencil, RefreshCw, Search, Sparkles, Trash2, TriangleAlert, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -262,6 +262,8 @@ export default function Message({
       <div className="min-w-0 flex-1">
         {modelBadge}
         {body}
+        {!editing && message.sources?.length > 0 && <SourceCards sources={message.sources} />}
+        {!editing && message.steps?.length > 0 && <StepsPanel steps={message.steps} live={streaming} />}
         {hasActions && !editing && (
           <div className="mt-1 flex items-center gap-0.5">
             {!isUser && (
@@ -286,6 +288,98 @@ export default function Message({
           <X size={15} />
         </button>
       )}
+    </div>
+  )
+}
+
+const STEP_STYLE = {
+  plan: { icon: Sparkles, className: 'text-violet-500 dark:text-violet-400' },
+  search: { icon: Search, className: 'text-sky-600 dark:text-sky-400' },
+  fetch: { icon: Globe, className: 'text-emerald-600 dark:text-emerald-400' },
+  answer: { icon: Check, className: 'text-neutral-500 dark:text-neutral-400' },
+  info: { icon: Info, className: 'text-neutral-400 dark:text-neutral-500' },
+  notice: { icon: TriangleAlert, className: 'text-amber-600 dark:text-amber-400' },
+}
+
+function StepRow({ step, active }) {
+  const style = STEP_STYLE[step.kind] || STEP_STYLE.info
+  const Icon = style.icon
+  const notice = step.kind === 'notice'
+  return (
+    <div
+      className={`flex items-start gap-1.5 text-[11px] leading-4 ${
+        notice ? 'text-amber-600 dark:text-amber-400' : 'text-neutral-500 dark:text-neutral-400'
+      }`}
+    >
+      {active ? (
+        <Loader2 size={12} className="mt-0.5 shrink-0 animate-spin opacity-70" />
+      ) : (
+        <Icon size={12} className={`mt-0.5 shrink-0 ${style.className}`} />
+      )}
+      <span className="min-w-0 break-words">{step.text}</span>
+    </div>
+  )
+}
+
+function StepsPanel({ steps, live }) {
+  if (live) {
+    return (
+      <div className="mt-2 space-y-1">
+        {steps.map((s, i) => (
+          <StepRow key={`${s.kind}-${i}`} step={s} active={i === steps.length - 1} />
+        ))}
+      </div>
+    )
+  }
+  return (
+    <details className="group mt-2">
+      <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-lg px-1.5 py-1 text-[11px] font-medium text-neutral-400 transition select-none hover:bg-neutral-100 [&::-webkit-details-marker]:hidden dark:text-neutral-500 dark:hover:bg-neutral-800">
+        <ChevronDown size={12} className="transition group-open:rotate-180" />
+        Sources &amp; steps
+        <span className="text-neutral-300 dark:text-neutral-600">· {steps.length}</span>
+      </summary>
+      <div className="mt-1 space-y-1 pl-1">
+        {steps.map((s, i) => (
+          <StepRow key={`${s.kind}-${i}`} step={s} />
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function SourceCards({ sources }) {
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {sources.map((s, i) => {
+        let host = ''
+        try {
+          host = new URL(s.url).hostname.replace(/^www\./, '')
+        } catch {
+          host = ''
+        }
+        return (
+          <a
+            key={`${s.url}-${i}`}
+            href={s.url}
+            target="_blank"
+            rel="noreferrer"
+            className="flex max-w-[270px] items-center gap-2 rounded-xl border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 transition hover:border-neutral-400 dark:border-neutral-700 dark:bg-neutral-800 dark:hover:border-neutral-500"
+            title={s.title}
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[11px] font-medium">
+                <span className="mr-1 font-mono text-neutral-400">[{i + 1}]</span>
+                {s.title}
+              </span>
+              <span className="block truncate text-[10px] text-neutral-400 dark:text-neutral-500">
+                {host}
+                {s.published ? ` · ${s.published}` : ''}
+              </span>
+            </span>
+            <ExternalLink size={12} className="shrink-0 opacity-50" />
+          </a>
+        )
+      })}
     </div>
   )
 }

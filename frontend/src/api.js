@@ -45,6 +45,9 @@ export const api = {
   editMessage: (id, content) => request(`/api/messages/${id}`, { method: 'PATCH', body: JSON.stringify({ content }) }),
   deleteMessage: (id) => request(`/api/messages/${id}`, { method: 'DELETE' }),
 
+  testSearch: (query) => request('/api/search/test', { method: 'POST', body: JSON.stringify({ query }) }),
+  testFetch: (url) => request('/api/fetch/test', { method: 'POST', body: JSON.stringify({ url }) }),
+
   uploadFile: async (file, chatId) => {
     const fd = new FormData()
     fd.append('file', file)

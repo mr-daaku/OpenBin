@@ -5,6 +5,16 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const pick = (m) => ({ role: m.role, content: m.content })
 
+// The backend stamps every request with this so "today"/"latest" mean the
+// user's own day, not the server's.
+const TIMEZONE = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+  } catch {
+    return ''
+  }
+})()
+
 /**
  * Owns the message list for the active chat plus streaming via fetch +
  * ReadableStream (SSE frames parsed by hand, no EventSource).
@@ -70,6 +80,27 @@ export default function useChat(chatId, onChatChanged, options = {}) {
     })
   }, [])
 
+  // Live "Sources & steps" trace: appended step by step while the answer is
+  // being written, replaced wholesale when the server sends its final meta.
+  const applyTrace = useCallback((patch) => {
+    const target = targetRef.current
+    if (!target) return
+    setMessages((prev) => {
+      const next = prev.slice()
+      const i = next.findIndex((m) => m.id === target.id)
+      if (i === -1) return prev
+      const msg = { ...next[i] }
+      if (patch.step || patch.notice) {
+        const entry = patch.step || { kind: 'notice', text: patch.notice.text }
+        msg.steps = [...(msg.steps || []), entry]
+      }
+      if (patch.steps) msg.steps = patch.steps
+      if (patch.sources) msg.sources = patch.sources
+      next[i] = msg
+      return next
+    })
+  }, [])
+
   const run = useCallback(
     async (payload, session) => {
       setError(null)
@@ -121,6 +152,14 @@ export default function useChat(chatId, onChatChanged, options = {}) {
             }
             if (data.type === 'token') {
               applyToken(data.content, payload.model)
+            } else if (data.type === 'step') {
+              applyTrace({ step: { kind: data.kind || 'info', text: data.text } })
+            } else if (data.type === 'notice') {
+              applyTrace({ notice: data })
+            } else if (data.type === 'search') {
+              applyTrace({ sources: data.results || [] })
+            } else if (data.type === 'meta') {
+              applyTrace({ sources: data.sources || [], steps: data.steps || [] })
             } else if (data.type === 'done') {
               sawDone = true
             } else if (data.type === 'error') {
@@ -155,8 +194,12 @@ export default function useChat(chatId, onChatChanged, options = {}) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chatId, applyToken],
+    [chatId, applyToken, applyTrace],
   )
+
+  // Search mode + timezone travel with every request (send, regenerate,
+  // edit & resend, continue), so a reply never falls back to a wrong mode.
+  const searchOpts = () => ({ search: optsRef.current.searchMode || 'auto', tz: TIMEZONE })
 
   const send = useCallback(
     async (raw, opts = {}) => {
@@ -186,6 +229,7 @@ export default function useChat(chatId, onChatChanged, options = {}) {
           append: true,
           files: files.map((f) => f.id),
           history: isIncognito() ? [...list, userMsg].map(pick) : null,
+          ...searchOpts(),
         },
         session,
       )
@@ -205,7 +249,11 @@ export default function useChat(chatId, onChatChanged, options = {}) {
       const serverId = typeof messageId === 'number' ? messageId : null
 
       targetRef.current = { id: messageId, create: false }
-      setMessages(list.map((m, i) => (i === idx ? { ...m, content: '' } : m)))
+      setMessages(
+        list.map((m, i) =>
+          i === idx ? { ...m, content: '', steps: null, sources: null } : m,
+        ),
+      )
 
       await run(
         {
@@ -214,6 +262,7 @@ export default function useChat(chatId, onChatChanged, options = {}) {
           append: false,
           truncate_from: serverId,
           history: isIncognito() ? list.slice(0, idx).map(pick) : null,
+          ...searchOpts(),
         },
         session,
       )
@@ -254,6 +303,7 @@ export default function useChat(chatId, onChatChanged, options = {}) {
           model: model || null,
           append: false,
           history: isIncognito() ? kept.map(pick) : null,
+          ...searchOpts(),
         },
         session,
       )
@@ -294,6 +344,7 @@ export default function useChat(chatId, onChatChanged, options = {}) {
         append: false,
         continue_last: true,
         history: isIncognito() ? list.map(pick) : null,
+        ...searchOpts(),
       },
       session,
     )

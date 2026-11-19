@@ -44,3 +44,11 @@ CREATE TABLE IF NOT EXISTS providers (
     is_active INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Does this endpoint+model accept native tool calls? Written only after a
+-- tool call fails (then 0), so an unsupported model is never retried twice.
+CREATE TABLE IF NOT EXISTS model_tools (
+    key TEXT PRIMARY KEY,
+    supports INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

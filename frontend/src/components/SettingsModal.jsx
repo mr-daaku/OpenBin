@@ -11,6 +11,12 @@ const EMPTY = {
   max_tokens: 1024,
   history_limit: 12,
   theme: 'dark',
+  search_provider: 'gradio',
+  search_space: '',
+  search_key: '',
+  search_tavily_key: '',
+  search_custom_url: '',
+  search_custom_key: '',
 }
 
 const PRESETS = [
@@ -54,6 +60,10 @@ export default function SettingsModal({ settings, onClose, onSaved }) {
   const [showModels, setShowModels] = useState(false)
   const [testResult, setTestResult] = useState(null)
   const [busy, setBusy] = useState(null) // 'test' | 'save' | 'models' | 'provider' | 'activate' | null
+  const [searchQuery, setSearchQuery] = useState('latest AI news')
+  const [fetchUrl, setFetchUrl] = useState('')
+  const [searchTest, setSearchTest] = useState(null)
+  const [searchBusy, setSearchBusy] = useState(null) // 'search' | 'fetch' | null
 
   const set = (name) => (e) => setForm((f) => ({ ...f, [name]: e.target.value }))
   const setEdit = (name) => (e) => setEditing((p) => ({ ...p, [name]: e.target.value }))
@@ -123,7 +133,42 @@ export default function SettingsModal({ settings, onClose, onSaved }) {
     max_tokens: Number(form.max_tokens),
     history_limit: Number(form.history_limit),
     theme: form.theme,
+    search_provider: form.search_provider,
+    search_space: form.search_space,
+    search_key: form.search_key,
+    search_tavily_key: form.search_tavily_key,
+    search_custom_url: form.search_custom_url,
+    search_custom_key: form.search_custom_key,
   })
+
+  const runSearchTest = async () => {
+    setSearchBusy('search')
+    setSearchTest(null)
+    try {
+      setSearchTest(await api.testSearch(searchQuery))
+    } catch (err) {
+      setSearchTest({ ok: false, error: err.message })
+    } finally {
+      setSearchBusy(null)
+    }
+  }
+
+  const runFetchTest = async () => {
+    const url = fetchUrl.trim()
+    if (!url) {
+      setSearchTest({ ok: false, error: 'Enter a page URL first, e.g. https://example.com' })
+      return
+    }
+    setSearchBusy('fetch')
+    setSearchTest(null)
+    try {
+      setSearchTest(await api.testFetch(url))
+    } catch (err) {
+      setSearchTest({ ok: false, error: err.message })
+    } finally {
+      setSearchBusy(null)
+    }
+  }
 
   const test = async () => {
     if (!editing?.id) return
@@ -437,6 +482,165 @@ export default function SettingsModal({ settings, onClose, onSaved }) {
                 Not in the loaded list — it will still be sent as-is.
               </p>
             )}
+          </div>
+
+          {/* ------------------------------------------------ web search */}
+          <div>
+            <SectionTitle>Web search</SectionTitle>
+            <div className="space-y-3 rounded-xl border border-neutral-200 p-3 dark:border-neutral-800">
+              <div>
+                <Label>Provider</Label>
+                <select value={form.search_provider} onChange={set('search_provider')} className={inputClass}>
+                  <option value="gradio">Gradio search space</option>
+                  <option value="tavily">Tavily</option>
+                  <option value="custom">Custom search API</option>
+                </select>
+              </div>
+
+              {form.search_provider === 'gradio' && (
+                <>
+                  <div>
+                    <Label hint="owner/space-name">Space</Label>
+                    <input
+                      type="text"
+                      value={form.search_space}
+                      onChange={set('search_space')}
+                      placeholder="mrdaaku/search-api"
+                      className={`${inputClass} font-mono`}
+                    />
+                  </div>
+                  <div>
+                    <Label hint={form.search_key.includes('****') ? 'saved' : undefined}>API key</Label>
+                    <input
+                      type="password"
+                      value={form.search_key}
+                      onChange={set('search_key')}
+                      placeholder="paste the space key…"
+                      autoComplete="off"
+                      className={`${inputClass} font-mono`}
+                    />
+                  </div>
+                </>
+              )}
+
+              {form.search_provider === 'tavily' && (
+                <div>
+                  <Label hint={form.search_tavily_key.includes('****') ? 'saved' : undefined}>Tavily API key</Label>
+                  <input
+                    type="password"
+                    value={form.search_tavily_key}
+                    onChange={set('search_tavily_key')}
+                    placeholder="tvly-…"
+                    autoComplete="off"
+                    className={`${inputClass} font-mono`}
+                  />
+                </div>
+              )}
+
+              {form.search_provider === 'custom' && (
+                <>
+                  <div>
+                    <Label hint="GET {url}/search?q=…">Base URL</Label>
+                    <input
+                      type="text"
+                      value={form.search_custom_url}
+                      onChange={set('search_custom_url')}
+                      placeholder="https://your-search-api.example"
+                      className={`${inputClass} font-mono`}
+                    />
+                  </div>
+                  <div>
+                    <Label hint={form.search_custom_key.includes('****') ? 'saved' : undefined}>API key</Label>
+                    <input
+                      type="password"
+                      value={form.search_custom_key}
+                      onChange={set('search_custom_key')}
+                      placeholder="optional"
+                      autoComplete="off"
+                      className={`${inputClass} font-mono`}
+                    />
+                  </div>
+                </>
+              )}
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && runSearchTest()}
+                  placeholder="Test query"
+                  className={`${inputClass} min-w-0 flex-1`}
+                />
+                <button
+                  onClick={runSearchTest}
+                  disabled={searchBusy !== null}
+                  className="flex shrink-0 items-center gap-1.5 rounded-xl border border-neutral-300 px-3 py-2.5 text-xs font-medium hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                >
+                  {searchBusy === 'search' && <Loader2 size={13} className="animate-spin" />}
+                  Test search
+                </button>
+              </div>
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={fetchUrl}
+                  onChange={(e) => setFetchUrl(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && runFetchTest()}
+                  placeholder="https://example.com"
+                  className={`${inputClass} min-w-0 flex-1 font-mono`}
+                />
+                <button
+                  onClick={runFetchTest}
+                  disabled={searchBusy !== null}
+                  className="flex shrink-0 items-center gap-1.5 rounded-xl border border-neutral-300 px-3 py-2.5 text-xs font-medium hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                >
+                  {searchBusy === 'fetch' && <Loader2 size={13} className="animate-spin" />}
+                  Test page fetch
+                </button>
+              </div>
+
+              {searchTest && (
+                <div
+                  className={`rounded-xl px-3 py-2.5 text-xs ${
+                    searchTest.ok
+                      ? 'bg-green-50 text-green-700 dark:bg-green-950/50 dark:text-green-300'
+                      : 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300'
+                  }`}
+                >
+                  {searchTest.ok ? (
+                    <div className="space-y-1">
+                      {Array.isArray(searchTest.results) && (
+                        <>
+                          <p className="font-medium">
+                            Search works{searchTest.provider ? ` · ${searchTest.provider}` : ''} (
+                            {searchTest.results.length} results)
+                          </p>
+                          {searchTest.results.slice(0, 3).map((r) => (
+                            <p key={r.url} className="truncate" title={r.title}>
+                              • {r.title}
+                            </p>
+                          ))}
+                        </>
+                      )}
+                      {typeof searchTest.text === 'string' && (
+                        <>
+                          <p className="font-medium">
+                            Read {searchTest.host} · {searchTest.chars} chars · {searchTest.title}
+                          </p>
+                          <p className="line-clamp-4 whitespace-pre-wrap text-[11px] opacity-80">
+                            {searchTest.text.slice(0, 400)}
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="whitespace-pre-wrap break-words">{searchTest.error}</p>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* ------------------------------------------------ prompt + params */}

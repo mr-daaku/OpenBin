@@ -21,6 +21,23 @@ export default function App() {
   const [chatSettings, setChatSettings] = useState({})
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
+  // Web search mode for the chat input: off | auto | always | research.
+  const [searchMode, setSearchMode] = useState(() => {
+    try {
+      return localStorage.getItem('openbin.searchMode') || 'auto'
+    } catch {
+      return 'auto'
+    }
+  })
+
+  const changeSearchMode = useCallback((mode) => {
+    setSearchMode(mode)
+    try {
+      localStorage.setItem('openbin.searchMode', mode)
+    } catch {
+      /* private mode - the choice just will not persist */
+    }
+  }, [])
 
   const queryRef = useRef('')
   queryRef.current = query
@@ -35,7 +52,7 @@ export default function App() {
   const currentModel = modelByChat[activeId] || settings?.model || ''
 
   const { messages, streaming, error, stopReason, send, stop, clearError, showError, regenerate, editAndResend, removeMessage, continueReply } =
-    useChat(activeId, refreshChats, { incognito })
+    useChat(activeId, refreshChats, { incognito, searchMode })
 
   // Sidebar search (debounced server-side search over titles + message text).
   useEffect(() => {
@@ -291,6 +308,8 @@ export default function App() {
           onToggleIncognito={handleToggleIncognito}
           incognito={incognito}
           busy={busy || streaming}
+          searchMode={searchMode}
+          onSearchModeChange={changeSearchMode}
         />
       </main>
 

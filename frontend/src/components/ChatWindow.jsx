@@ -355,6 +355,8 @@ export default function ChatWindow({
   onToggleIncognito,
   incognito,
   busy,
+  searchMode,
+  onSearchModeChange,
 }) {
   const scrollRef = useRef(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -483,7 +485,15 @@ export default function ChatWindow({
               </button>
             </div>
           )}
-          <ChatInput streaming={streaming} onSend={onSend} onStop={onStop} onDraftChange={setDraft} chatId={chatId} />
+          <ChatInput
+            streaming={streaming}
+            onSend={onSend}
+            onStop={onStop}
+            onDraftChange={setDraft}
+            chatId={chatId}
+            searchMode={searchMode}
+            onSearchModeChange={onSearchModeChange}
+          />
           <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-neutral-400">
             <span className="truncate">Local app · your chats stay on this computer</span>
             <span className="shrink-0" title="Approximate token count of your draft">
