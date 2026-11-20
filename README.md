@@ -19,7 +19,6 @@ A local, ChatGPT-style chat app. Everything runs on your computer and everything
 - **Model capabilities + vision gating** — capability DB with manual overrides; images are resized in the browser (1568px, JPEG 0.85) and blocked for models without vision.
 - **Image generation** — per-provider image endpoint config, size/count presets, multi-format response parser.
 - **Memory system** — memories / preferences / styles stored locally with CRUD API and Settings tabs (auto-extraction is a stub for now).
-- **Projects** — group chats into projects with custom instructions and knowledge files; instructions are prepended to the system prompt.
 - **Welcome screen** — suggestion cards for new chats (explain / code / plan / summarize).
 - **PWA** — installable (manifest + icons), service worker gives an offline shell for the UI (chat requests always need the backend).
 
@@ -113,7 +112,7 @@ OpenBin/
 │   │   ├── artifacts.js        (artifact parsing + download formats)
 │   │   ├── highlight.js        (lazy highlight.js loader)
 │   │   └── components/
-│   │       ├── Sidebar.jsx     (chats, projects, search)
+│   │       ├── Sidebar.jsx     (chats, search)
 │   │       ├── ChatWindow.jsx  (welcome screen, chat menu, exports)
 │   │       ├── ChatInput.jsx   (modes, model picker, files, image gen)
 │   │       ├── Message.jsx
@@ -148,11 +147,10 @@ OpenBin/
 | GET      | `/api/models`              | legacy alias of the active provider's list |
 | POST     | `/api/settings/test`       | tiny request, returns success or the exact error |
 | GET/POST | `/api/chats`               | list / create chats                        |
-| PATCH    | `/api/chats/{id}`          | rename / pin / move to project             |
+| PATCH    | `/api/chats/{id}`          | rename / pin / incognito                   |
 | DELETE   | `/api/chats/{id}`          | delete a chat (messages go with it)        |
 | GET      | `/api/chats/{id}/messages` | message history                            |
 | POST     | `/api/chats/{id}/stream`   | save the user message, stream the reply as SSE, save the reply |
-| GET/POST/PUT/DELETE | `/api/projects…`   | projects CRUD + knowledge files            |
 | GET/POST/PUT/DELETE | `/api/memories…`    | memories CRUD                              |
 | GET      | `/api/models/capabilities` | vision/tools/image/reasoning capabilities  |
 | POST     | `/api/search/test`         | one test web search                        |

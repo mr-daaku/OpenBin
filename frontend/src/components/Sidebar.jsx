@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { EyeOff, FileUp, FolderKanban, Pin, PinOff, Pencil, Plus, Search, Trash2, X, Check } from 'lucide-react'
-import { api } from '../api.js'
+import { useRef, useState } from 'react'
+import { EyeOff, FileUp, Pin, PinOff, Pencil, Plus, Search, Trash2, X, Check } from 'lucide-react'
 
 function groupOf(createdAt) {
   const d = new Date(String(createdAt).replace(' ', 'T') + 'Z')
@@ -17,71 +16,6 @@ function groupOf(createdAt) {
 
 const ORDER = ['Pinned', 'Today', 'Yesterday', 'Last 7 days', 'Older']
 
-function ProjectsList({ onNewProject, onSelectProject, activeProjectId }) {
-  const [projects, setProjects] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [showForm, setShowForm] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [newInstructions, setNewInstructions] = useState('')
-
-  useEffect(() => {
-    let alive = true
-    api.listProjects().then((data) => alive && setProjects(data)).finally(() => alive && setLoading(false))
-    return () => { alive = false }
-  }, [])
-
-  const create = async () => {
-    const name = newName.trim()
-    if (!name) return
-    try {
-      const p = await api.createProject({ name, instructions: newInstructions })
-      setProjects([p, ...projects])
-      setShowForm(false)
-      setNewName('')
-      setNewInstructions('')
-      if (onSelectProject) onSelectProject(p.id)
-    } catch (err) { alert(err.message) }
-  }
-
-  const select = (id) => {
-    if (onSelectProject) onSelectProject(id)
-  }
-
-  if (loading) return <div className="px-2 py-2 text-xs text-neutral-400">Loading projects…</div>
-
-  return (
-    <div className="space-y-1">
-      {showForm && (
-        <div className="space-y-2 p-2 rounded-lg border border-neutral-200 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800">
-          <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Project name" className="w-full rounded-lg border border-neutral-300 px-2 py-1.5 text-sm dark:border-neutral-700" />
-          <textarea value={newInstructions} onChange={(e) => setNewInstructions(e.target.value)} placeholder="Custom instructions (optional)" rows={2} className="w-full rounded-lg border border-neutral-300 px-2 py-1.5 text-sm resize-y dark:border-neutral-700" />
-          <div className="flex gap-1.5">
-            <button onClick={create} disabled={!newName.trim()} className="flex-1 rounded-lg bg-neutral-900 px-2 py-1.5 text-xs font-medium text-white hover:bg-neutral-700 disabled:opacity-50 dark:bg-white dark:text-neutral-900">Create</button>
-            <button onClick={() => setShowForm(false)} className="rounded-lg border border-neutral-300 px-2 py-1.5 text-xs font-medium hover:bg-neutral-100 dark:border-neutral-700">Cancel</button>
-          </div>
-        </div>
-      )}
-      {projects.length === 0 && !showForm && (
-        <div className="px-2 py-2 text-center text-xs text-neutral-400">
-          No projects yet. <button onClick={() => setShowForm(true)} className="text-blue-600 hover:underline ml-1">Create one</button>
-        </div>
-      )}
-      {projects.map((p) => (
-        <button
-          key={p.id}
-          onClick={() => select(p.id)}
-          className={`w-full flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition ${activeProjectId === p.id ? 'bg-neutral-200 font-medium dark:bg-neutral-800' : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'}`}
-          title={p.instructions || 'No custom instructions'}
-        >
-          <FolderKanban size={14} className={`shrink-0 ${activeProjectId === p.id ? 'text-neutral-600 dark:text-neutral-400' : 'text-neutral-400'}`} />
-          <span className="truncate">{p.name}</span>
-        </button>
-      ))}
-      {!showForm && <button onClick={() => setShowForm(true)} className="w-full flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"><Plus size={14} /> New project</button>}
-    </div>
-  )
-}
-
 export default function Sidebar({
   chats,
   activeId,
@@ -96,9 +30,6 @@ export default function Sidebar({
   onTogglePin,
   onImport,
   onClose,
-  onNewProject,
-  onSelectProject,
-  activeProjectId,
 }) {
   const [editingId, setEditingId] = useState(null)
   const [draft, setDraft] = useState('')
@@ -197,15 +128,6 @@ export default function Sidebar({
               Incognito
             </button>
           </div>
-        </div>
-
-        {/* Projects section */}
-        <div className="border-t border-neutral-200 pt-3 px-3 pb-2 dark:border-neutral-800">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">Projects</span>
-            <button onClick={onNewProject} className="rounded-lg p-1.5 text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-800" aria-label="New project"><Plus size={14} /></button>
-          </div>
-          <ProjectsList onNewProject={onNewProject} onSelectProject={onSelectProject} activeProjectId={activeProjectId} />
         </div>
 
         <nav className="scroll-slim flex-1 overflow-y-auto px-3 pb-3">

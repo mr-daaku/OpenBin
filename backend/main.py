@@ -151,7 +151,6 @@ def init_db() -> None:
             "ALTER TABLE chats ADD COLUMN system_prompt TEXT",
             "ALTER TABLE chats ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE chats ADD COLUMN incognito INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE chats ADD COLUMN project_id INTEGER REFERENCES projects (id) ON DELETE SET NULL",
             "ALTER TABLE messages ADD COLUMN sources TEXT",
             "ALTER TABLE messages ADD COLUMN steps TEXT",
             "ALTER TABLE model_caps ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))",
@@ -163,6 +162,26 @@ def init_db() -> None:
                 conn.execute(stmt)
             except sqlite3.OperationalError:
                 pass
+        # One-time migration: the projects feature was removed (Step 2).
+        # Only projects data is ever deleted here - chats, messages, memories
+        # and settings are untouched. The legacy chats.project_id column must
+        # go too: its REFERENCES clause points at the projects table, and with
+        # foreign keys on, a dangling parent breaks every write to chats.
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("DROP TABLE IF EXISTS project_files")
+        conn.execute("DROP TABLE IF EXISTS projects")
+        try:
+            conn.execute("ALTER TABLE chats DROP COLUMN project_id")
+        except sqlite3.OperationalError:
+            # Column already gone (fresh DB) or SQLite too old to drop it.
+            # Recreate an empty parent so the remaining FK still resolves.
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(chats)")]
+            if "project_id" in cols:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY)"
+                )
+        conn.execute("PRAGMA foreign_keys=ON")
         # One-time migration: an old DB may hold an empty system_prompt, which
         # would shadow the new default. Drop only that empty row (never data).
         conn.execute("DELETE FROM settings WHERE key = 'system_prompt' AND value = ''")
@@ -1101,152 +1120,11 @@ def import_memories(body: dict):
         conn.close()
 
 
-# ---------------------------------------------------------------- projects api
-
-
-class ProjectIn(BaseModel):
-    name: str
-    instructions: str = ""
-
-
-class ProjectFileIn(BaseModel):
-    project_id: int
-    name: str
-    mime: str = ""
-    size: int = 0
-    path: str
-    extracted: str = ""
-
-
-@app.get("/api/projects")
-def list_projects():
-    conn = connect()
-    try:
-        rows = conn.execute(
-            "SELECT id, name, instructions, created_at, updated_at FROM projects ORDER BY updated_at DESC"
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-@app.post("/api/projects")
-def create_project(body: ProjectIn):
-    name = (body.name or "").strip()
-    if not name:
-        return JSONResponse({"error": "Name required"}, status_code=400)
-    instructions = body.instructions or ""
-    conn = connect()
-    try:
-        with conn:
-            cur = conn.execute(
-                "INSERT INTO projects (name, instructions) VALUES (?, ?)",
-                (name[:80], instructions),
-            )
-            row = conn.execute(
-                "SELECT id, name, instructions, created_at, updated_at FROM projects WHERE id = ?",
-                (cur.lastrowid,),
-            ).fetchone()
-        return dict(row)
-    finally:
-        conn.close()
-
-
-@app.patch("/api/projects/{project_id}")
-def update_project(project_id: int, body: ProjectIn):
-    conn = connect()
-    try:
-        row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-        if not row:
-            return JSONResponse({"error": "Project not found"}, status_code=404)
-        updates = {}
-        if body.name is not None:
-            n = body.name.strip()
-            if not n:
-                return JSONResponse({"error": "Name cannot be empty"}, status_code=400)
-            updates["name"] = n[:80]
-        if body.instructions is not None:
-            updates["instructions"] = body.instructions
-        if updates:
-            updates["updated_at"] = "datetime('now')"
-            with conn:
-                conn.execute(
-                    f"UPDATE projects SET {', '.join(f'{k} = ?' for k in updates)} WHERE id = ?",
-                    (*updates.values(), project_id),
-                )
-        fresh = conn.execute(
-            "SELECT id, name, instructions, created_at, updated_at FROM projects WHERE id = ?",
-            (project_id,),
-        ).fetchone()
-        return dict(fresh)
-    finally:
-        conn.close()
-
-
-@app.delete("/api/projects/{project_id}")
-def delete_project(project_id: int):
-    conn = connect()
-    try:
-        with conn:
-            conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-        return {"ok": True}
-    finally:
-        conn.close()
-
-
-@app.get("/api/projects/{project_id}/files")
-def list_project_files(project_id: int):
-    conn = connect()
-    try:
-        row = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
-        if not row:
-            return JSONResponse({"error": "Project not found"}, status_code=404)
-        rows = conn.execute(
-            "SELECT id, project_id, name, mime, size, path, extracted, created_at FROM project_files WHERE project_id = ? ORDER BY created_at",
-            (project_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-@app.post("/api/projects/{project_id}/files")
-def upload_project_file(project_id: int, body: ProjectFileIn):
-    conn = connect()
-    try:
-        row = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
-        if not row:
-            return JSONResponse({"error": "Project not found"}, status_code=404)
-        with conn:
-            cur = conn.execute(
-                "INSERT INTO project_files (project_id, name, mime, size, path, extracted) VALUES (?, ?, ?, ?, ?, ?)",
-                (project_id, body.name[:200], body.mime, body.size, body.path, body.extracted),
-            )
-            row = conn.execute(
-                "SELECT id, project_id, name, mime, size, path, extracted, created_at FROM project_files WHERE id = ?",
-                (cur.lastrowid,),
-            ).fetchone()
-        return dict(row)
-    finally:
-        conn.close()
-
-
-@app.delete("/api/projects/{project_id}/files/{file_id}")
-def delete_project_file(project_id: int, file_id: int):
-    conn = connect()
-    try:
-        with conn:
-            conn.execute("DELETE FROM project_files WHERE id = ? AND project_id = ?", (file_id, project_id))
-        return {"ok": True}
-    finally:
-        conn.close()
-
-
 # ---------------------------------------------------------------- chats api
 
 CHAT_COLS = (
     "id, title, created_at, pinned, incognito, model, temperature, "
-    "max_tokens, top_p, system_prompt, project_id"
+    "max_tokens, top_p, system_prompt"
 )
 
 
@@ -1262,10 +1140,9 @@ def chat_settings(row: sqlite3.Row) -> dict:
 
 def chat_out(row: sqlite3.Row) -> dict:
     return {
-        **{k: row[k] for k in ("id", "title", "created_at", "pinned", "incognito", "project_id")},
+        **{k: row[k] for k in ("id", "title", "created_at", "pinned", "incognito")},
         "pinned": bool(row["pinned"]),
         "incognito": bool(row["incognito"]),
-        "project_id": row["project_id"],
         "settings": chat_settings(row),
     }
 
@@ -1295,17 +1172,9 @@ def list_chats(q: str | None = None):
 
 @app.post("/api/chats")
 def create_chat(body: dict = {}):
-    project_id = body.get("project_id")
     conn = connect()
     try:
-        if project_id is not None:
-            # Verify project exists
-            proj = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
-            if not proj:
-                return JSONResponse({"error": "Project not found"}, status_code=404)
-            cur = conn.execute("INSERT INTO chats (title, project_id) VALUES ('New Chat', ?)", (project_id,))
-        else:
-            cur = conn.execute("INSERT INTO chats (title) VALUES ('New Chat')")
+        cur = conn.execute("INSERT INTO chats (title) VALUES ('New Chat')")
         conn.commit()
         row = conn.execute(f"SELECT {CHAT_COLS} FROM chats WHERE id = ?", (cur.lastrowid,)).fetchone()
         return chat_out(row)
@@ -1319,7 +1188,6 @@ class ChatSettingsIn(BaseModel):
     max_tokens: int | None = None
     top_p: float | None = None
     system_prompt: str | None = None
-    project_id: int | None = None
     clear: list[str] = []
 
 
@@ -1341,14 +1209,8 @@ def put_chat_settings(chat_id: int, body: ChatSettingsIn):
             updates["top_p"] = min(1.0, max(0.0, body.top_p))
         if body.system_prompt is not None:
             updates["system_prompt"] = body.system_prompt.strip() or None
-        if body.project_id is not None:
-            # Verify project exists
-            proj = conn.execute("SELECT id FROM projects WHERE id = ?", (body.project_id,)).fetchone()
-            if not proj:
-                return JSONResponse({"error": "Project not found"}, status_code=404)
-            updates["project_id"] = body.project_id
         for name in body.clear:
-            if name in ("model", "temperature", "max_tokens", "top_p", "system_prompt", "project_id"):
+            if name in ("model", "temperature", "max_tokens", "top_p", "system_prompt"):
                 updates[name] = None
         if updates:
             with conn:
@@ -2839,18 +2701,7 @@ def build_run(chat: sqlite3.Row, picked_model: str | None, st: dict) -> dict:
     temperature = chat["temperature"] if chat["temperature"] is not None else float(st["temperature"])
     max_tokens = chat["max_tokens"] if chat["max_tokens"] is not None else int(st["max_tokens"])
     system_prompt = chat["system_prompt"] if chat["system_prompt"] is not None else st["system_prompt"]
-    
-    # If chat belongs to a project, prepend project instructions to system prompt
-    if chat["project_id"]:
-        conn = connect()
-        try:
-            proj = conn.execute("SELECT instructions FROM projects WHERE id = ?", (chat["project_id"],)).fetchone()
-            if proj and proj["instructions"].strip():
-                project_inst = proj["instructions"].strip()
-                system_prompt = f"{project_inst}\n\n---\n\n{system_prompt}" if system_prompt else project_inst
-        finally:
-            conn.close()
-    
+
     model = (picked_model or "").strip() or chat["model"] or st["model"]
     return {
         "api_key": key,

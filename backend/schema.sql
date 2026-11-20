@@ -80,25 +80,3 @@ CREATE TABLE IF NOT EXISTS memories (
     pinned INTEGER NOT NULL DEFAULT 0
 );
 
--- Projects: named contexts with custom instructions + knowledge files
-CREATE TABLE IF NOT EXISTS projects (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    instructions TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Project knowledge files (linked to projects, not chats)
-CREATE TABLE IF NOT EXISTS project_files (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    mime TEXT NOT NULL DEFAULT '',
-    size INTEGER NOT NULL DEFAULT 0,
-    path TEXT NOT NULL,
-    extracted TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_project_files_project_id ON project_files (project_id);
