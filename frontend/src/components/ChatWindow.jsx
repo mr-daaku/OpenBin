@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Download, Menu, MoreHorizontal, Shield, Sparkles, SlidersHorizontal, TriangleAlert, X } from 'lucide-react'
+import { Download, FileCode, FileText, Menu, MoreHorizontal, Shield, Sparkles, SlidersHorizontal, Telescope, TriangleAlert, X } from 'lucide-react'
 import ChatInput, { estimateTokens } from './ChatInput.jsx'
 import Message from './Message.jsx'
 import ArtifactPanel from './ArtifactPanel.jsx'
@@ -89,6 +89,34 @@ function ChatSettingsPanel({ settings, defaultModel, onSave, onClose }) {
     </div>
   )
 }
+
+// Starter prompts for the new-chat welcome screen. Clicking a card sends it.
+const SUGGESTIONS = [
+  {
+    label: 'Explain a concept',
+    hint: 'Explain quantum computing like I am 12 years old',
+    prompt: 'Explain quantum computing like I am 12 years old, with a simple everyday analogy.',
+    icon: Sparkles,
+  },
+  {
+    label: 'Write code',
+    hint: 'Python script to organize my downloads folder',
+    prompt: 'Write a Python script that organizes files in my Downloads folder by file type into subfolders. Explain how to run it.',
+    icon: FileCode,
+  },
+  {
+    label: 'Plan & research',
+    hint: '3-day trip plan with budget',
+    prompt: 'Plan a 3-day trip to Manali with a daily itinerary and a rough budget for a couple.',
+    icon: Telescope,
+  },
+  {
+    label: 'Summarize text',
+    hint: 'Paste text and get key points',
+    prompt: 'I will paste a long text. Summarize it into 5 bullet points and one short conclusion. First tell me you are ready.',
+    icon: FileText,
+  },
+]
 
 function download(filename, text, type) {
   const blob = new Blob([text], { type })
@@ -316,14 +344,33 @@ export default function ChatWindow({
       <div ref={scrollRef} className="scroll-slim flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-6 md:px-6">
           {messages.length === 0 ? (
-            <div className="flex min-h-[55vh] flex-col items-center justify-center gap-3 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-neutral-900 text-lg font-bold text-white dark:bg-white dark:text-neutral-900">
-                O
+            <div className="flex min-h-[55vh] flex-col items-center justify-center gap-4 text-center">
+              <div className="flex flex-col items-center gap-2">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-neutral-900 text-lg font-bold text-white dark:bg-white dark:text-neutral-900">
+                  O
+                </div>
+                <h1 className="text-2xl font-semibold tracking-tight">OpenBin</h1>
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                  Ask anything to get started.
+                </p>
               </div>
-              <h1 className="text-2xl font-semibold tracking-tight">OpenBin</h1>
-              <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                Ask anything to get started.
-              </p>
+              <div className="grid w-full max-w-2xl grid-cols-1 gap-2 sm:grid-cols-2">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s.label}
+                    type="button"
+                    disabled={busy || streaming}
+                    onClick={() => onSend(s.prompt, [])}
+                    className="group flex items-start gap-3 rounded-2xl border border-neutral-200 bg-white p-3 text-left transition hover:border-neutral-400 hover:bg-neutral-50 disabled:opacity-60 sm:flex-col sm:gap-2 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:border-neutral-500 dark:hover:bg-neutral-800"
+                  >
+                    <s.icon size={16} className="mt-0.5 shrink-0 text-neutral-500 group-hover:text-neutral-800 sm:mt-0 dark:text-neutral-400 dark:group-hover:text-neutral-100" />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium">{s.label}</span>
+                      <span className="mt-0.5 block text-xs leading-5 text-neutral-500 dark:text-neutral-400">{s.hint}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             messages.map((message, index) => (

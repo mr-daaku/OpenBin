@@ -47,6 +47,17 @@ export default function App() {
     }
   }, [])
 
+  const handleSettingsChange = useCallback((patch) => {
+    setSettings((prev) => {
+      const next = { ...prev, ...patch }
+      // Apply theme immediately if theme changed
+      if (patch.theme && patch.theme !== prev?.theme) {
+        applyTheme(patch.theme)
+      }
+      return next
+    })
+  }, [])
+
   const queryRef = useRef('')
   queryRef.current = query
 
@@ -386,6 +397,7 @@ export default function App() {
             location.hash = ''
           }}
           onSaved={handleSettingsSaved}
+          onChange={handleSettingsChange}
         />
       )}
     </div>

@@ -50,7 +50,18 @@ export function extractArtifacts(content) {
   return { text: out.replace(/\n{3,}/g, '\n\n').trim(), artifacts }
 }
 
-const EXT = { html: 'html', react: 'jsx', svg: 'svg', markdown: 'md', code: 'txt' }
+const EXT = { html: 'html', react: 'jsx', svg: 'svg', markdown: 'md', code: 'txt', csv: 'csv', json: 'json' }
+
+// Download formats offered for any artifact body (raw text, extension changes only).
+export const DOWNLOAD_FORMATS = ['md', 'txt', 'html', 'csv', 'json']
+
+export const FORMAT_MIME = {
+  md: 'text/markdown',
+  txt: 'text/plain',
+  html: 'text/html',
+  csv: 'text/csv',
+  json: 'application/json',
+}
 
 export function artifactFilename(a) {
   const slug = (a.title || 'artifact')

@@ -2810,7 +2810,6 @@ def build_run(chat: sqlite3.Row, picked_model: str | None, st: dict) -> dict:
             if proj and proj["instructions"].strip():
                 project_inst = proj["instructions"].strip()
                 system_prompt = f"{project_inst}\n\n---\n\n{system_prompt}" if system_prompt else project_inst
-                print(f"[DEBUG] Project instructions added: {project_inst[:50]}...")
         finally:
             conn.close()
     

@@ -1012,7 +1012,7 @@ const TAB_COMPONENTS = {
 // Main Settings Page
 // ============================================================
 
-export default function SettingsPage({ onClose, onSaved }) {
+export default function SettingsPage({ onClose, onSaved, onChange }) {
   const [settings, setSettings] = useState(null)
   const [loading, setLoading] = useState(true)
   const [hash, setHash] = useState(parseHash())
@@ -1044,7 +1044,10 @@ export default function SettingsPage({ onClose, onSaved }) {
     onSaved?.(next)
   }
 
-  const handleChange = (patch) => setSettings((s) => ({ ...s, ...patch }))
+  const handleChange = (patch) => {
+    setSettings((s) => ({ ...s, ...patch }))
+    onChange?.(patch)
+  }
 
   const activeCat = CATEGORIES.find((c) => c.id === hash.cat) || CATEGORIES[0]
   const activeTab = findTab(hash.cat, hash.tab) || activeCat.tabs[0]

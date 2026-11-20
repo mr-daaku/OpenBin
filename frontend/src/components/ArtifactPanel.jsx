@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Code, Copy, Download, ExternalLink, Eye, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { artifactFilename, downloadText } from '../artifacts.js'
+import { artifactFilename, downloadText, DOWNLOAD_FORMATS, FORMAT_MIME } from '../artifacts.js'
 import { highlightCode, loadHljs } from '../highlight.js'
 
 function HtmlPreview({ body }) {
@@ -36,6 +36,27 @@ function MarkdownPreview({ body }) {
 export default function ArtifactPanel({ artifact, onClose }) {
   const [tab, setTab] = useState('preview')
   const [copied, setCopied] = useState(false)
+  const [dlOpen, setDlOpen] = useState(false)
+  const dlRef = useRef(null)
+
+  // Close the download-format menu when clicking anywhere else.
+  useEffect(() => {
+    if (!dlOpen) return
+    const onDown = (e) => {
+      if (dlRef.current && !dlRef.current.contains(e.target)) setDlOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [dlOpen])
+
+  const baseName = artifactFilename(artifact).replace(/\.[^.]+$/, '')
+
+  // Default extension for the artifact's own type; the menu lets the user
+  // pick .md / .txt / .html / .csv / .json for the same body.
+  const saveAs = (fmt) => {
+    setDlOpen(false)
+    downloadText(`${baseName}.${fmt}`, body, FORMAT_MIME[fmt] || 'text/plain')
+  }
 
   const previewable = ['html', 'svg', 'markdown'].includes(artifact.type)
   const activeTab = previewable ? tab : 'code'
@@ -120,14 +141,36 @@ export default function ArtifactPanel({ artifact, onClose }) {
         >
           {copied ? <Check size={15} /> : <Copy size={15} />}
         </button>
-        <button
-          onClick={() => downloadText(artifactFilename(artifact), body)}
-          className="rounded-lg p-1.5 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-          title="Download"
-          aria-label="Download artifact"
-        >
-          <Download size={15} />
-        </button>
+        <div ref={dlRef} className="relative">
+          <button
+            onClick={() => setDlOpen((v) => !v)}
+            className="rounded-lg p-1.5 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+            title="Download (choose format)"
+            aria-label="Download artifact"
+            aria-haspopup="menu"
+          >
+            <Download size={15} />
+          </button>
+          {dlOpen && (
+            <div role="menu" className="absolute right-0 top-full z-40 mt-1 w-36 rounded-lg border border-neutral-200 bg-white p-1 shadow-xl dark:border-neutral-700 dark:bg-neutral-900">
+              {DOWNLOAD_FORMATS.map((fmt) => (
+                <button
+                  key={fmt}
+                  role="menuitem"
+                  onClick={() => saveAs(fmt)}
+                  className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 ${
+                    fmt === 'txt' || fmt === 'md' ? 'font-medium' : ''
+                  }`}
+                >
+                  <span>.{fmt}</span>
+                  {artifactFilename(artifact).endsWith(`.${fmt}`) && (
+                    <Check size={12} className="text-neutral-400" />
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <button
           onClick={openInTab}
           className="rounded-lg p-1.5 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
