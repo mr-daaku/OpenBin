@@ -40,14 +40,29 @@ export default function ChatInput({
   const [files, setFiles] = useState([]) // {key, id, name, kind, url, uploading}
   const [modeOpen, setModeOpen] = useState(false)
   const [visionWarn, setVisionWarn] = useState(false)
+  const [blockedImages, setBlockedImages] = useState([]) // held back until "Try anyway"
+  const [forceImages, setForceImages] = useState(false) // per-model override for this session
+  const [dragOver, setDragOver] = useState(false)
   const ref = useRef(null)
   const fileRef = useRef(null)
   const modeRef = useRef(null)
   const keyRef = useRef(0)
 
-  const hasVision = !!modelCaps.vision
+  // Tri-state vision gate: "yes" and "unknown" attach freely; only a hard
+  // "no" (manual override or a provider rejection) holds images back.
+  const visionState =
+    modelCaps.vision_state || (modelCaps.source === 'manual' ? (modelCaps.vision ? 'yes' : 'no') : 'unknown')
+  const hasVision = visionState !== 'no'
   const isImageGenOnly = !!modelCaps.image_gen && !modelCaps.vision && !modelCaps.tools
   const isImageGen = !!modelCaps.image_gen
+  const visionBlocked = !hasVision && !isImageGenOnly && !forceImages
+
+  // A different model means the old "Try anyway" choice no longer applies.
+  useEffect(() => {
+    setForceImages(false)
+    setVisionWarn(false)
+    setBlockedImages([])
+  }, [model])
 
   // Image generation mode state
   const [imgMode, setImgMode] = useState(false)
@@ -126,13 +141,13 @@ export default function ChatInput({
     })
   }
 
-  const addFiles = async (list) => {
+  const addFiles = async (list, force = false) => {
+    const blocked = []
     for (const file of Array.from(list || [])) {
       const isImage = file.type.startsWith('image/')
-      // Vision gating: block image if model has no vision (and is not image-gen only)
-      if (isImage && !hasVision && !isImageGenOnly) {
-        setVisionWarn(true)
-        setTimeout(() => setVisionWarn(false), 4000)
+      // Vision gating: only a hard "no" holds images back (unknown attaches fine)
+      if (isImage && visionBlocked && !force) {
+        blocked.push(file)
         continue
       }
       const processedFile = isImage ? await resizeImage(file) : file
@@ -147,6 +162,25 @@ export default function ChatInput({
         setFiles((prev) => prev.map((f) => (f.key === key ? { ...f, uploading: false, error: err.message } : f)))
       }
     }
+    // Images held back by the gate: keep them so the banner can offer "Try anyway".
+    if (blocked.length) {
+      setBlockedImages(blocked)
+      setVisionWarn(true)
+    }
+  }
+
+  // User accepts the risk on a non-vision model: re-run the gate in force mode.
+  const tryAnyway = () => {
+    const held = blockedImages
+    setVisionWarn(false)
+    setBlockedImages([])
+    setForceImages(true)
+    if (held.length) addFiles(held, true)
+  }
+
+  const dismissVisionWarn = () => {
+    setVisionWarn(false)
+    setBlockedImages([])
   }
 
   const removeFile = (key) => setFiles((prev) => prev.filter((f) => f.key !== key))
@@ -157,6 +191,13 @@ export default function ChatInput({
       e.preventDefault()
       addFiles(items)
     }
+  }
+
+  // Drag & drop routes through the same addFiles gate as paste and the picker.
+  const onDrop = (e) => {
+    e.preventDefault()
+    setDragOver(false)
+    if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files)
   }
 
   const uploading = files.some((f) => f.uploading)
@@ -222,11 +263,36 @@ export default function ChatInput({
   const CurrentIcon = currentMode.icon
 
   return (
-    <div className="rounded-3xl border border-neutral-300 bg-white p-2 shadow-sm transition focus-within:border-neutral-500 dark:border-neutral-700 dark:bg-neutral-900 dark:focus-within:border-neutral-500">
+    <div
+      className={`rounded-3xl border bg-white p-2 shadow-sm transition focus-within:border-neutral-500 dark:bg-neutral-900 dark:focus-within:border-neutral-500 ${
+        dragOver ? 'border-blue-400 ring-2 ring-blue-200 dark:border-blue-600 dark:ring-blue-900/60' : 'border-neutral-300 dark:border-neutral-700'
+      }`}
+      onDragOver={(e) => {
+        if (e.dataTransfer?.types?.includes('Files')) {
+          e.preventDefault()
+          setDragOver(true)
+        }
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={onDrop}
+    >
       {visionWarn && (
-        <div className="mb-2 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300" role="alert">
+        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300" role="alert">
           <AlertTriangle size={14} className="shrink-0" />
-          <span>This model doesn't support images. Switch to a vision model or remove the image.</span>
+          <span className="min-w-0 flex-1">This model is marked as not supporting images. Attach anyway, or switch to a vision model.</span>
+          <button
+            onClick={tryAnyway}
+            className="shrink-0 rounded-md border border-amber-300 bg-white px-2 py-1 font-medium text-amber-700 transition hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900/60"
+          >
+            Try anyway
+          </button>
+          <button
+            onClick={dismissVisionWarn}
+            className="shrink-0 rounded p-1 transition hover:bg-amber-100 dark:hover:bg-amber-900/60"
+            aria-label="Dismiss"
+          >
+            <X size={13} />
+          </button>
         </div>
       )}
       {files.length > 0 && (

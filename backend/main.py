@@ -658,7 +658,7 @@ class CapsIn(BaseModel):
 
 
 @app.post("/api/providers/{provider_id}/caps")
-def update_model_caps(provider_id: int, body: CapsIn):
+async def update_model_caps(provider_id: int, body: CapsIn):
     conn = connect()
     try:
         row = conn.execute("SELECT * FROM providers WHERE id = ?", (provider_id,)).fetchone()
@@ -670,14 +670,29 @@ def update_model_caps(provider_id: int, body: CapsIn):
         if body.reset:
             reset_model_caps(provider_id, model)
             return {"model": model, "reset": True}
+        # Merge: start from the current manual row if one exists, otherwise from
+        # provider metadata (fetched live) with the name heuristic as fallback,
+        # so a partial update (e.g. only `tools`) never silently zeroes the
+        # other capabilities - least of all vision.
+        base = get_model_caps(provider_id, model)
+        if base.get("source") != "manual":
+            base = dict(infer_caps_from_name(model))
+            st = load_settings()
+            provider = load_provider(provider_id)
+            if provider is not None:
+                base_url, key = provider_creds(provider, st)
+                data = await fetch_models(base_url, key)
+                pm = data.get("meta", {}).get(model)
+                if pm:
+                    base.update({k: v for k, v in pm.items() if k in base})
         caps = {
-            "vision": body.vision if body.vision is not None else 0,
-            "image_gen": body.image_gen if body.image_gen is not None else 0,
-            "tools": body.tools if body.tools is not None else 1,
-            "reasoning": body.reasoning if body.reasoning is not None else 0,
+            "vision": body.vision if body.vision is not None else base.get("vision", 0),
+            "image_gen": body.image_gen if body.image_gen is not None else base.get("image_gen", 0),
+            "tools": body.tools if body.tools is not None else base.get("tools", 1),
+            "reasoning": body.reasoning if body.reasoning is not None else base.get("reasoning", 0),
         }
         set_model_caps(provider_id, model, caps)
-        return {"model": model, **caps, "source": "manual"}
+        return {"model": model, **caps, "source": "manual", "vision_state": "yes" if caps["vision"] else "no"}
     finally:
         conn.close()
 
@@ -733,7 +748,13 @@ def infer_caps_from_name(model: str) -> dict:
 
 
 def get_model_caps(provider_id: int, model: str) -> dict:
-    """Get capabilities for a model: manual override > provider metadata > name heuristic."""
+    """Get capabilities for a model: manual override > provider metadata > name heuristic.
+
+    vision_state is the tri-state used for image gating:
+      "yes"     - manual override says vision works
+      "no"      - manual override (or a provider rejection) says it does not
+      "unknown" - no manual row yet; auto-detection decides later
+    """
     conn = connect()
     try:
         row = conn.execute(
@@ -747,11 +768,19 @@ def get_model_caps(provider_id: int, model: str) -> dict:
                 "tools": row["tools"],
                 "reasoning": row["reasoning"],
                 "source": row["source"],
+                "vision_state": "yes" if row["vision"] else "no",
             }
     finally:
         conn.close()
-    # No manual override - will be filled by provider metadata or heuristic later
-    return {"vision": 0, "image_gen": 0, "tools": 1, "reasoning": 0, "source": "auto"}
+    # No manual override - auto-detect later (never silently "no").
+    return {
+        "vision": 0,
+        "image_gen": 0,
+        "tools": 1,
+        "reasoning": 0,
+        "source": "auto",
+        "vision_state": "unknown",
+    }
 
 
 def set_model_caps(provider_id: int, model: str, caps: dict) -> None:
@@ -800,15 +829,15 @@ async def provider_models(provider_id: int):
     enriched = []
     for m in models:
         caps = get_model_caps(provider_id, m)
-        # Merge provider metadata if available
-        if m in meta:
-            pm = meta[m]
-            if caps["source"] == "auto":
-                caps.update({k: v for k, v in pm.items() if k in caps})
-        # Fallback to name heuristic if still auto
         if caps["source"] == "auto":
-            heuristic = infer_caps_from_name(m)
-            caps.update(heuristic)
+            # Auto path: name heuristic as the base, provider metadata on top
+            # (metadata is authoritative), then resolve the tri-state - "yes"
+            # only when detection says so, else "unknown" (never a hard "no",
+            # so attaching an image stays allowed).
+            caps.update(infer_caps_from_name(m))
+            if m in meta:
+                caps.update({k: v for k, v in meta[m].items() if k in caps})
+            caps["vision_state"] = "yes" if caps.get("vision") else "unknown"
         enriched.append({"id": m, **caps})
     return {"models": enriched, "error": data.get("error")}
 
@@ -2622,7 +2651,15 @@ async def generate(
                     # Provider rejected images - mark model as no vision and show clear message
                     provider = load_provider()
                     if provider and run.get("model"):
-                        set_model_caps(provider["id"], run["model"], {"vision": 0, "image_gen": 0, "tools": 1, "reasoning": 0})
+                        # Preserve the other caps; only force vision off (this
+                        # also becomes the manual "no" that gates attaching).
+                        existing = get_model_caps(provider["id"], run["model"])
+                        set_model_caps(provider["id"], run["model"], {
+                            "vision": 0,
+                            "image_gen": existing.get("image_gen", 0),
+                            "tools": existing.get("tools", 1),
+                            "reasoning": existing.get("reasoning", 0),
+                        })
                     yield sse({
                         "type": "error",
                         "error": "This model does not support image inputs. The model has been marked as non-vision. Please switch to a vision-capable model or remove images from the chat.",
@@ -2755,14 +2792,15 @@ class MessageIn(BaseModel):
 
 def build_content(content: str, rows: list[sqlite3.Row], allow_images: bool = True, has_vision: bool = True):
     """Message payload for the model: text + extracted file text + image parts.
-    If has_vision is False and images are present, a warning note is added."""
+    When has_vision is False the image parts are omitted and a clear note is
+    added, so the model knows images existed but were not sent."""
     notes = []
     parts = []
     has_image_attachments = False
     for r in rows:
         if r["kind"] == "image":
             has_image_attachments = True
-            if allow_images and r["mime"].startswith("image/"):
+            if allow_images and has_vision and r["mime"].startswith("image/"):
                 try:
                     data = Path(r["path"]).read_bytes()
                 except OSError:
@@ -2779,9 +2817,9 @@ def build_content(content: str, rows: list[sqlite3.Row], allow_images: bool = Tr
         else:
             notes.append(f"[file attached: {r['name']} - content not readable as text]")
     text = content.strip()
-    # If model has no vision but images were attached, add a clear warning
+    # Images exist but were withheld (model marked non-vision): say so plainly.
     if has_image_attachments and not has_vision:
-        notes.insert(0, "⚠️ This model does not support image inputs. Images were sent but the model cannot see them. Please switch to a vision-capable model for image analysis.")
+        notes.insert(0, "⚠️ Image input is disabled for this model, so the attached image(s) were NOT sent with this message. To analyze images, switch to a vision-capable model and resend.")
     if notes:
         text = (text + "\n\n" if text else "") + "\n\n".join(notes)
     if parts:
@@ -2849,13 +2887,15 @@ async def stream_message(chat_id: int, body: MessageIn):
 
         st = load_settings()
         run = build_run(chat, body.model, st)
-        # Fetch vision capability for this model
-        run["has_vision"] = True
+        # Tri-state vision gate: only a hard "no" (manual override or a prior
+        # provider rejection) blocks image parts; "unknown"/"yes" send them.
+        run["vision_state"] = "unknown"
         if run.get("base_url") and run.get("model"):
             provider = load_provider()
             if provider:
                 caps = get_model_caps(provider["id"], run["model"])
-                run["has_vision"] = bool(caps.get("vision"))
+                run["vision_state"] = caps.get("vision_state", "unknown")
+        run["has_vision"] = run["vision_state"] != "no"
         persist = not bool(chat["incognito"])
         limit = max(1, int(st["history_limit"]))
 
@@ -2946,8 +2986,14 @@ async def stream_message(chat_id: int, body: MessageIn):
 
     messages = []
     # Real-time awareness + the "web content is data" rule go into EVERY
-    # request, on top of whatever system prompt is configured.
-    runtime = f"{now_line(body.tz)}\n{WEB_SAFETY_NOTE}"
+    # request, on top of whatever system prompt is configured. The image line
+    # tells the model outright whether it will receive image parts.
+    vision_line = (
+        "Image input in this chat: enabled."
+        if run.get("has_vision", True)
+        else "Image input in this chat: disabled - image attachments were omitted from this request."
+    )
+    runtime = f"{now_line(body.tz)}\n{vision_line}\n{WEB_SAFETY_NOTE}"
     system = run["system_prompt"].strip()
     messages.append({"role": "system", "content": f"{system}\n\n{runtime}" if system else runtime})
     messages.extend(history)

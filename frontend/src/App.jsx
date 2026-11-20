@@ -23,7 +23,7 @@ export default function App() {
   const [ready, setReady] = useState(false)
   const [fatal, setFatal] = useState(null)
   const [modelByChat, setModelByChat] = useState({})
-  const [modelCaps, setModelCaps] = useState({}) // modelId -> {vision, image_gen, tools, reasoning}
+  const [modelCaps, setModelCaps] = useState({}) // modelId -> {vision, vision_state, image_gen, tools, reasoning, source}
   const [chatSettings, setChatSettings] = useState({})
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
@@ -69,6 +69,39 @@ export default function App() {
   const activeChat = chats.find((c) => c.id === activeId)
   const incognito = !!activeChat?.incognito
   const currentModel = modelByChat[activeId] || settings?.model || ''
+
+  // Capability lookup for the active model. Runs at startup (so a manual
+  // "No vision" is honored before the first attach), on every model switch,
+  // and when Settings closes (overrides may have changed there).
+  const refreshModelCaps = useCallback(async (m) => {
+    if (!m) return
+    try {
+      const provs = await api.listProviders()
+      const active = provs.find((p) => p.is_active) || provs[0]
+      if (!active) return
+      const data = await api.providerModels(active.id)
+      const caps = data.models?.find((mm) => mm.id === m)
+      if (caps) {
+        setModelCaps((prev) => ({
+          ...prev,
+          [m]: {
+            vision: caps.vision,
+            vision_state: caps.vision_state,
+            image_gen: caps.image_gen,
+            tools: caps.tools,
+            reasoning: caps.reasoning,
+            source: caps.source,
+          },
+        }))
+      }
+    } catch {
+      /* caps are advisory - the chat keeps working without them */
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!settingsPage && currentModel) refreshModelCaps(currentModel)
+  }, [settingsPage, currentModel, refreshModelCaps])
 
   const { messages, streaming, error, stopReason, send, stop, clearError, showError, regenerate, editAndResend, removeMessage, continueReply } =
     useChat(activeId, refreshChats, { incognito, searchMode })
@@ -357,21 +390,10 @@ export default function App() {
           onOpenSidebar={() => setSidebarOpen(true)}
           model={currentModel}
           modelCaps={modelCaps[currentModel] || {}}
-          onModelChange={async (m) => {
+          onModelChange={(m) => {
             setModelByChat((prev) => ({ ...prev, [activeId]: m }))
             handleChatSettings({ model: m })
-            // Fetch capabilities for the new model
-            try {
-              const provs = await api.listProviders()
-              const active = provs.find((p) => p.is_active) || provs[0]
-              if (active) {
-                const data = await api.providerModels(active.id)
-                const caps = data.models?.find((mm) => mm.id === m)
-                if (caps) {
-                  setModelCaps((prev) => ({ ...prev, [m]: { vision: caps.vision, image_gen: caps.image_gen, tools: caps.tools, reasoning: caps.reasoning } }))
-                }
-              }
-            } catch { /* ignore */ }
+            // Caps for the new model load via the refreshModelCaps effect.
           }}
           chatSettings={chatSettings[activeId] || {}}
           onSaveChatSettings={handleChatSettings}

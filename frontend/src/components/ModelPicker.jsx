@@ -70,7 +70,7 @@ export default function ModelPicker({ model, onPick, defaultModel }) {
   const restVisible = visible.filter((m) => !pinned.includes(m.id))
   // A manually typed id is not in the provider list - show it on its own so
   // the current choice is always visible.
-  const orphan = model && !models.some((m) => m.id === model) ? [{ id: model, vision: 0, image_gen: 0, tools: 1, reasoning: 0, source: 'manual' }] : []
+  const orphan = model && !models.some((m) => m.id === model) ? [{ id: model, vision: 0, image_gen: 0, tools: 1, reasoning: 0, source: 'auto', vision_state: 'unknown' }] : []
 
   const choose = (name) => {
     onPick(name)

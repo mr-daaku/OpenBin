@@ -350,6 +350,29 @@ function ModelsTab({ settings, onSave, onChange }) {
     } catch (err) { setError(err.message) }
   }
 
+  // Tri-state vision control: Auto (unknown) -> Yes -> No -> Auto.
+  // "Auto" clears the manual row (all caps fall back to detection), matching
+  // the existing reset behaviour of the schema's per-row source.
+  const visionStateOf = (m) =>
+    m.vision_state || (m.source === 'manual' ? (m.vision ? 'yes' : 'no') : (m.vision ? 'yes' : 'unknown'))
+
+  const cycleVision = async (m) => {
+    if (!activeProviderId) return
+    const state = visionStateOf(m)
+    try {
+      if (state === 'unknown') {
+        await api.updateModelCaps(activeProviderId, m.id, { vision: 1 })
+        setModels(models.map((x) => (x.id === m.id ? { ...x, vision: 1, vision_state: 'yes', source: 'manual' } : x)))
+      } else if (state === 'yes') {
+        await api.updateModelCaps(activeProviderId, m.id, { vision: 0 })
+        setModels(models.map((x) => (x.id === m.id ? { ...x, vision: 0, vision_state: 'no', source: 'manual' } : x)))
+      } else {
+        await api.resetModelCaps(activeProviderId, m.id)
+        load() // back to auto-detection
+      }
+    } catch (err) { setError(err.message) }
+  }
+
   const useManual = () => {
     const v = manual.trim()
     if (!v) return
@@ -374,6 +397,36 @@ function ModelsTab({ settings, onSave, onChange }) {
       {source === 'manual' && <span className="text-[9px]">●</span>}
     </button>
   )
+
+  // 3-state vision badge: Auto (unknown) / Yes / No - click cycles forward.
+  const VisionBadge = ({ m, disabled }) => {
+    const state = visionStateOf(m)
+    const next = { unknown: 'yes', yes: 'no', no: 'unknown' }[state]
+    const text = { unknown: 'Auto', yes: 'Yes', no: 'No' }[state]
+    const tone =
+      state === 'yes'
+        ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+        : state === 'no'
+        ? 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-500'
+        : 'bg-neutral-100 text-neutral-500 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700'
+    const hint = {
+      unknown: 'Image input: auto-detected (images allowed) — click to force Yes',
+      yes: 'Image input: Yes (manual) — click to force No',
+      no: 'Image input: No (manual) — images are held back — click to reset to Auto',
+    }[state]
+    return (
+      <button
+        onClick={() => !disabled && cycleVision(m)}
+        disabled={disabled}
+        className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition ${tone}`}
+        title={hint}
+        aria-label={`Image input: ${text}. Next: ${next}`}
+      >
+        👁 {text}
+        {m.source === 'manual' && <span className="text-[9px]">●</span>}
+      </button>
+    )
+  }
 
   return (
     <TabPanel dirty={false} onSave={() => {}}>
@@ -410,7 +463,7 @@ function ModelsTab({ settings, onSave, onChange }) {
                   <div key={m.id} className="flex items-center gap-2 rounded-lg border border-green-300 bg-green-50 px-3 py-1.5 dark:border-green-900 dark:bg-green-950/30">
                     <span className="font-mono text-sm text-green-700 dark:text-green-400">{m.id}</span>
                     <div className="flex items-center gap-1">
-                      <CapBadge label="👁" value={m.vision} source={m.source} onToggle={(v) => toggleCap(m.id, 'vision', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
+                      <VisionBadge m={m} disabled={isImageGenOnly(m)} />
                       <CapBadge label="🖼" value={m.image_gen} source={m.source} onToggle={(v) => toggleCap(m.id, 'image_gen', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
                       <CapBadge label="🔧" value={m.tools} source={m.source} onToggle={(v) => toggleCap(m.id, 'tools', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
                       <CapBadge label="🧠" value={m.reasoning} source={m.source} onToggle={(v) => toggleCap(m.id, 'reasoning', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
@@ -428,7 +481,7 @@ function ModelsTab({ settings, onSave, onChange }) {
               <div key={m.id} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-mono transition ${isImageGenOnly(m) ? 'border-amber-300 bg-amber-50 opacity-60 dark:border-amber-900/30 dark:bg-amber-950/20' : pinned.includes(m.id) ? 'border-blue-300 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/30' : 'border-neutral-200 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800'}`}>
                 <span className="min-w-0 flex-1 truncate">{m.id}</span>
                 <div className="flex items-center gap-1 shrink-0">
-                  <CapBadge label="👁" value={m.vision} source={m.source} onToggle={(v) => toggleCap(m.id, 'vision', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
+                  <VisionBadge m={m} disabled={isImageGenOnly(m)} />
                   <CapBadge label="🖼" value={m.image_gen} source={m.source} onToggle={(v) => toggleCap(m.id, 'image_gen', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
                   <CapBadge label="🔧" value={m.tools} source={m.source} onToggle={(v) => toggleCap(m.id, 'tools', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
                   <CapBadge label="🧠" value={m.reasoning} source={m.source} onToggle={(v) => toggleCap(m.id, 'reasoning', v)} onReset={() => resetCap(m.id)} disabled={isImageGenOnly(m)} />
