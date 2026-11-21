@@ -1,0 +1,1 @@
+Continue exactly from where you stopped. Do not repeat any text that is already written - just keep going.

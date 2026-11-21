@@ -49,6 +49,11 @@ venv\Scripts\python.exe -m uvicorn main:app --reload --port 8000
 
 Leave this running. On first start it creates `backend/data/openbin.db` from `schema.sql`.
 
+The built-in prompts (system prompt, search router, safety note, …) live as plain files in
+`backend/system/*.md`. To customize them, copy that folder anywhere and start the backend with
+`OPENBIN_SYSTEM_DIR` pointing at your copy — a missing folder or file fails fast with a clear
+error instead of starting with a broken prompt.
+
 ### 2. Frontend
 
 ```powershell
@@ -131,6 +136,7 @@ OpenBin/
 │   ├── webtools.py
 │   ├── schema.sql
 │   ├── requirements.txt
+│   ├── system/           (built-in prompts; override folder with OPENBIN_SYSTEM_DIR)
 │   └── data/            (created automatically, git-ignored)
 ├── .gitignore
 └── README.md
