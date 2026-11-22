@@ -282,7 +282,7 @@ export default function ChatWindow({
   return (
     <div className="flex h-full min-w-0">
       <div className="flex h-full min-w-0 flex-1 flex-col">
-      <header className="relative flex items-center gap-3 border-b border-neutral-200 px-4 py-3 dark:border-neutral-800 md:px-6">
+      <header className="relative flex items-center gap-3 px-4 py-3 md:px-6">
         <button
           onClick={onOpenSidebar}
           className="rounded-lg p-1.5 text-neutral-500 hover:bg-neutral-50 md:hidden dark:hover:bg-neutral-800"
@@ -389,8 +389,13 @@ export default function ChatWindow({
         </div>
       </div>
 
-      <div className="border-t border-neutral-200 dark:border-neutral-800">
-        <div className="mx-auto w-full max-w-3xl px-4 py-4 md:px-6">
+      {/* Composer: no hard divider — messages fade out behind the input, Claude-style */}
+      <div className="relative">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 h-7 -translate-y-full bg-gradient-to-t from-neutral-50 to-transparent dark:from-neutral-950"
+        />
+        <div className="mx-auto w-full max-w-3xl px-4 pt-4 pb-5 md:px-6">
           {canContinue && (
             <div className="mb-2 flex justify-center">
               <button
