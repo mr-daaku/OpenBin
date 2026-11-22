@@ -399,6 +399,7 @@ export default function App() {
           chatSettings={chatSettings[activeId] || {}}
           onSaveChatSettings={handleChatSettings}
           defaultModel={settings.model}
+          displayName={settings.display_name || ''}
           onRegenerate={(id) => regenerate(id, currentModel)}
           onEdit={(id, content) => editAndResend(id, content, currentModel)}
           onDelete={removeMessage}

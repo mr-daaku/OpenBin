@@ -4,6 +4,14 @@ import ChatInput, { estimateTokens } from './ChatInput.jsx'
 import Message from './Message.jsx'
 import ArtifactPanel from './ArtifactPanel.jsx'
 
+// Time-based greeting for the welcome screen: "Good morning" / "Good afternoon" / "Good evening".
+function timeGreeting(d = new Date()) {
+  const h = d.getHours()
+  if (h >= 5 && h < 12) return 'Good morning'
+  if (h >= 12 && h < 17) return 'Good afternoon'
+  return 'Good evening'
+}
+
 function ChatSettingsPanel({ settings, defaultModel, onSave, onClose }) {
   const [temperature, setTemperature] = useState(settings.temperature ?? 0.7)
   const [maxTokens, setMaxTokens] = useState(settings.max_tokens ?? 1024)
@@ -245,6 +253,7 @@ export default function ChatWindow({
   chatSettings,
   onSaveChatSettings,
   defaultModel,
+  displayName,
   onRegenerate,
   onEdit,
   onDelete,
@@ -349,7 +358,9 @@ export default function ChatWindow({
                 <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-neutral-900 text-lg font-bold text-white dark:bg-white dark:text-neutral-900">
                   O
                 </div>
-                <h1 className="text-2xl font-semibold tracking-tight">OpenBin</h1>
+                <h1 className="font-serif text-3xl font-medium tracking-tight sm:text-4xl">
+                  {timeGreeting()}{displayName ? `, ${displayName}` : ''}
+                </h1>
                 <p className="text-sm text-neutral-500 dark:text-neutral-400">
                   Ask anything to get started.
                 </p>

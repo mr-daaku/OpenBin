@@ -92,6 +92,7 @@ DEFAULTS = {
     "response_length": "normal",  # short | normal | long
     "custom_styles": "[]",  # JSON array of {name, instruction}
     "active_style": "Casual",
+    "display_name": "",  # shown in the welcome greeting ("Good evening, Gaurav")
 }
 
 # SHA-256 of earlier built-in system prompts. A stored prompt matching one of
@@ -188,7 +189,7 @@ def init_db() -> None:
         )
         # Ensure new memory settings exist (for existing DBs)
         for k, v in DEFAULTS.items():
-            if k in ("memory_enabled", "memory_model", "language", "tone", "response_length", "custom_styles", "active_style"):
+            if k in ("memory_enabled", "memory_model", "language", "tone", "response_length", "custom_styles", "active_style", "display_name"):
                 exists = conn.execute("SELECT 1 FROM settings WHERE key = ?", (k,)).fetchone()
                 if not exists:
                     conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (k, v))
@@ -249,6 +250,7 @@ def public_settings(st: dict) -> dict:
         "response_length": st.get("response_length", "normal"),
         "custom_styles": st.get("custom_styles", "[]"),
         "active_style": st.get("active_style", "Casual"),
+        "display_name": st.get("display_name", ""),
     }
 
 
@@ -401,6 +403,7 @@ class SettingsIn(BaseModel):
     search_tavily_key: str | None = None
     search_custom_url: str | None = None
     search_custom_key: str | None = None
+    display_name: str | None = None
 
 
 class MessageEditIn(BaseModel):
@@ -426,6 +429,8 @@ def put_settings(body: SettingsIn):
         value = getattr(body, name)
         if value is not None:
             updates[name] = value.strip()
+    if body.display_name is not None:
+        updates["display_name"] = body.display_name.strip()[:64]
     # Web search settings: a masked value ("nvapi-****1234") means "keep the
     # saved one"; an empty string clears the field on purpose.
     for name in ("search_space", "search_custom_url"):

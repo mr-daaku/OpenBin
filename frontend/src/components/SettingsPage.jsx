@@ -892,13 +892,20 @@ function PreferencesTab({ settings, onSave, onChange }) {
   const [language, setLanguage] = useState(settings.language || 'auto')
   const [tone, setTone] = useState(settings.tone || 'casual')
   const [responseLength, setResponseLength] = useState(settings.response_length || 'normal')
-  const dirty = language !== settings.language || tone !== settings.tone || responseLength !== settings.response_length
+  const [displayName, setDisplayName] = useState(settings.display_name || '')
+  const dirty = language !== settings.language || tone !== settings.tone || responseLength !== settings.response_length || displayName !== (settings.display_name || '')
 
-  useEffect(() => { setLanguage(settings.language || 'auto'); setTone(settings.tone || 'casual'); setResponseLength(settings.response_length || 'normal') }, [settings.language, settings.tone, settings.response_length])
+  useEffect(() => { setLanguage(settings.language || 'auto'); setTone(settings.tone || 'casual'); setResponseLength(settings.response_length || 'normal'); setDisplayName(settings.display_name || '') }, [settings.language, settings.tone, settings.response_length, settings.display_name])
 
   return (
-    <TabPanel dirty={dirty} onSave={() => onSave({ language, tone, response_length: responseLength })}>
+    <TabPanel dirty={dirty} onSave={() => onSave({ language, tone, response_length: responseLength, display_name: displayName })}>
       <div className="space-y-6">
+        <div>
+          <label className="block text-xs font-medium mb-2">Display name</label>
+          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} maxLength={64} placeholder="e.g. Gaurav" className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700" />
+          <p className="mt-2 text-xs text-neutral-500">Used in the welcome greeting — "Good evening, Gaurav". Leave empty for no name.</p>
+        </div>
+
         <div>
           <label className="block text-xs font-medium mb-2">Language</label>
           <div className="flex gap-2 flex-wrap">
