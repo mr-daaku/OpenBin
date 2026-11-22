@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Brain, ChevronDown, Copy, Download, Eye, Loader2, Moon, Save, Search, Shield, Sun, Trash2, Upload, X } from 'lucide-react'
 import { api } from '../api.js'
 import { extractArtifacts, downloadText } from '../artifacts.js'
+import { navigate as routerNavigate, onNavigate, parsePath } from '../router.js'
 
 // ============================================================
 // Tab configuration — add a new entry here and it Just Works.
@@ -70,12 +71,11 @@ function findTab(catId, tabId) {
 }
 
 function parseHash() {
-  // #/settings/providers/models -> { cat: 'providers', tab: 'models' }
-  const h = location.hash.slice(1) // drop #
-  if (!h.startsWith('/settings/')) return { cat: 'general', tab: 'appearance' }
-  const parts = h.split('/').slice(2) // ['providers', 'models']
-  const cat = parts[0] || 'general'
-  const tab = parts[1] || CATEGORIES.find((c) => c.id === cat)?.tabs[0]?.id || 'appearance'
+  // /settings/providers/models -> { cat: 'providers', tab: 'models' }
+  const route = parsePath()
+  if (route.kind !== 'settings') return { cat: 'general', tab: 'appearance' }
+  const cat = route.cat || 'general'
+  const tab = route.tab || CATEGORIES.find((c) => c.id === cat)?.tabs[0]?.id || 'appearance'
   return { cat, tab }
 }
 
@@ -1071,15 +1071,11 @@ export default function SettingsPage({ onClose, onSaved, onChange }) {
   const [hash, setHash] = useState(parseHash())
   const [mobileCatOpen, setMobileCatOpen] = useState(false)
 
-  // Keep hash in sync with browser back/forward
-  useEffect(() => {
-    const onHash = () => setHash(parseHash())
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
-  }, [])
+  // Keep the selected category/tab in sync with browser back/forward
+  useEffect(() => onNavigate(() => setHash(parseHash())), [])
 
   const navigate = (cat, tab) => {
-    location.hash = `/settings/${cat}/${tab}`
+    routerNavigate(`/settings/${cat}/${tab}`)
   }
 
   const loadSettings = async () => {

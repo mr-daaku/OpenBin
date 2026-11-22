@@ -4,6 +4,7 @@ import ChatWindow from './components/ChatWindow.jsx'
 import SettingsPage from './components/SettingsPage.jsx'
 import { api } from './api.js'
 import useChat from './useChat.js'
+import { chatPath, navigate, onNavigate, parsePath, settingsPath } from './router.js'
 
 function applyTheme(theme) {
   if (theme === 'system') {
@@ -115,9 +116,12 @@ export default function App() {
     return () => clearTimeout(t)
   }, [query])
 
-  // First launch: load settings + chats, open Settings page at Providers when no API key yet.
+  // First launch: load settings + chats, honour any deep-linked path
+  // (/chat/<id>-<slug> or /settings/<cat>/<tab>), and open the Settings page
+  // at Providers when no API key yet.
   useEffect(() => {
     let alive = true
+    const route = parsePath()
     ;(async () => {
       try {
         const [st, rows] = await Promise.all([api.getSettings(), api.listChats()])
@@ -126,16 +130,22 @@ export default function App() {
         applyTheme(st.theme)
         if (rows.length) {
           setChats(rows)
-          setActiveId(rows[0].id)
+          const deepLinked = route.kind === 'chat' ? rows.find((c) => c.id === route.id) : null
+          const first = deepLinked || rows[0]
+          setActiveId(first.id)
+          if (route.kind !== 'settings') navigate(chatPath(first), { replace: true })
         } else {
           const chat = await api.createChat()
           if (!alive) return
           setChats([chat])
           setActiveId(chat.id)
+          if (route.kind !== 'settings') navigate(chatPath(chat), { replace: true })
         }
         if (!st.has_api_key) {
           setSettingsPage(true)
-          location.hash = '/settings/providers/providers'
+          navigate(settingsPath('providers', 'providers'))
+        } else if (route.kind === 'settings') {
+          setSettingsPage(true)
         }
       } catch (err) {
         if (alive) setFatal(err.message)
@@ -157,26 +167,28 @@ export default function App() {
     return () => mediaQuery.removeEventListener('change', handler)
   }, [settings?.theme])
 
-  // Open Settings page when hash navigates to /settings/...
+  // Keep the view in sync with the URL: /settings/... opens Settings,
+  // /chat/<id>-<slug> opens that chat (browser back/forward + navigate()).
   useEffect(() => {
-    const onHash = () => {
-      if (location.hash.startsWith('#/settings/')) {
+    return onNavigate((route) => {
+      if (route.kind === 'settings') {
         setSettingsPage(true)
-      } else if (settingsPage) {
-        setSettingsPage(false)
+        return
       }
-    }
-    window.addEventListener('hashchange', onHash)
-    // Also check initial hash on mount
-    onHash()
-    return () => window.removeEventListener('hashchange', onHash)
-  }, [settingsPage])
+      setSettingsPage(false)
+      if (route.kind === 'chat') {
+        const target = chats.find((c) => c.id === route.id)
+        if (target) setActiveId(target.id)
+      }
+    })
+  }, [chats])
 
   const handleNew = useCallback(async () => {
     try {
       const chat = await api.createChat()
       setChats((prev) => [chat, ...prev])
       setActiveId(chat.id)
+      navigate(chatPath(chat))
       setSidebarOpen(false)
       clearError()
     } catch (err) {
@@ -190,6 +202,7 @@ export default function App() {
       const marked = await api.updateChat(chat.id, { incognito: true })
       setChats((prev) => [marked, ...prev])
       setActiveId(marked.id)
+      navigate(chatPath(marked))
       setSidebarOpen(false)
       clearError()
     } catch (err) {
@@ -221,6 +234,7 @@ export default function App() {
       setQuery('')
       await refreshChats()
       setActiveId(chat.id)
+      navigate(chatPath(chat))
       setSidebarOpen(false)
     } catch (err) {
       showError(err.message)
@@ -237,10 +251,12 @@ export default function App() {
       if (activeId === chat.id) {
         if (remaining.length) {
           setActiveId(remaining[0].id)
+          navigate(chatPath(remaining[0]), { replace: true })
         } else {
           const fresh = await api.createChat()
           setChats([fresh])
           setActiveId(fresh.id)
+          navigate(chatPath(fresh), { replace: true })
         }
       }
     } catch (err) {
@@ -251,7 +267,10 @@ export default function App() {
   const handleSettingsSaved = (saved, opts = {}) => {
     setSettings(saved)
     applyTheme(saved.theme)
-    if (!opts.keepOpen) setSettingsPage(false)
+    if (!opts.keepOpen) {
+      setSettingsPage(false)
+      navigate(chatPath(activeChat), { replace: true })
+    }
     refreshChats()
   }
 
@@ -348,6 +367,8 @@ export default function App() {
           setActiveId(id)
           setSidebarOpen(false)
           clearError()
+          const target = chats.find((c) => c.id === id)
+          if (target) navigate(chatPath(target))
         }}
         onRename={handleRename}
         onDelete={handleDelete}
@@ -396,7 +417,7 @@ export default function App() {
           settings={settings}
           onClose={() => {
             setSettingsPage(false)
-            location.hash = ''
+            navigate(chatPath(activeChat), { replace: true })
           }}
           onSaved={handleSettingsSaved}
           onChange={handleSettingsChange}

@@ -3,10 +3,10 @@ setlocal
 set "ROOT=%~dp0"
 
 rem --------------------------------------------- already running?
-curl.exe -s -o nul http://localhost:5173/
+curl.exe -s -o nul http://localhost:5555/
 if not errorlevel 1 (
   echo OpenBin is already running. Opening the browser...
-  start "" http://localhost:5173
+  start "" http://localhost:5555
   pause
   exit /b 0
 )
@@ -36,7 +36,7 @@ if not exist "%ROOT%frontend\node_modules" (
 rem --------------------------------------------- start BOTH in THIS window
 echo Starting OpenBin...
 echo   Backend  : http://127.0.0.1:8000
-echo   Frontend : http://localhost:5173
+echo   Frontend : http://localhost:5555
 echo.
 echo   Both services run in this same window.
 echo   Press Ctrl+C (or close this window) to stop everything.
@@ -56,7 +56,7 @@ set /a tries=0
 ping -n 2 127.0.0.1 >nul
 curl.exe -s -o nul http://127.0.0.1:8000/api/settings
 if errorlevel 1 goto retry
-curl.exe -s -o nul http://localhost:5173/
+curl.exe -s -o nul http://localhost:5555/
 if errorlevel 1 goto retry
 goto ready
 
@@ -67,7 +67,7 @@ echo [WARN] A service did not answer in time. Opening the browser anyway.
 echo        Scroll up in this window to see which one failed.
 
 :ready
-start "" http://localhost:5173
+start "" http://localhost:5555
 echo.
 echo   OpenBin is up. You can close this window any time to stop it.
 echo.

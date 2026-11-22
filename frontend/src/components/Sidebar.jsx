@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { EyeOff, FileUp, Pin, PinOff, Pencil, Plus, Search, Trash2, X, Check } from 'lucide-react'
+import { navigate, settingsPath } from '../router.js'
 
 function groupOf(createdAt) {
   const d = new Date(String(createdAt).replace(' ', 'T') + 'Z')
@@ -221,7 +222,7 @@ export default function Sidebar({
               Import
             </button>
             <button
-              onClick={() => { location.hash = '/settings/providers/providers' }}
+              onClick={() => navigate(settingsPath('providers', 'providers'))}
               className="flex items-center justify-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-medium hover:bg-neutral-200 dark:hover:bg-neutral-800"
             >
               <Search size={15} />

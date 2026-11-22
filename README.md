@@ -14,7 +14,7 @@ A local, ChatGPT-style chat app. Everything runs on your computer and everything
 - **Web search** — Off / Auto / Always / Deep Research; Auto lets the model call `web_search` / `fetch_url` itself.
 - **Deep Research** — iterative plan → search → fetch → gap analysis, up to 3 rounds / 20 pages, with Stop support.
 - **Syntax highlighting + artifacts** — code fences are stripped from the chat text and shown in an artifact panel (preview for HTML/SVG/Markdown), with copy, open-in-tab and **download as .md / .txt / .html / .csv / .json**.
-- **Settings page** — full-page settings with categories (General, Providers, Web search, Appearance, Memory & Personalization, Export / Import), reachable via `#/settings/...`.
+- **Settings page** — full-page settings with categories (General, Providers, Web search, Appearance, Memory & Personalization, Export / Import), reachable via `/settings/...`.
 - **Theme** — dark / light / system (follows the OS preference live).
 - **Model capabilities + vision gating** — capability DB with manual overrides; images are resized in the browser (1568px, JPEG 0.85) and blocked for models without vision.
 - **Image generation** — per-provider image endpoint config, size/count presets, multi-format response parser.
@@ -33,7 +33,7 @@ A local, ChatGPT-style chat app. Everything runs on your computer and everything
 ### Option A - one click
 
 Double-click **`OpenBin.bat`** (in the project root). It starts the backend and the frontend in
-their own minimized windows and opens <http://localhost:5173> in your default browser. Close those
+their own minimized windows and opens <http://localhost:5555> in your default browser. Close those
 two windows to stop. (Run the one-time setup in Option B first if you ever move the folder.)
 
 ### Option B - two terminals (PowerShell)
@@ -62,7 +62,7 @@ npm install
 npm run dev
 ```
 
-Then open **<http://localhost:5173>**.
+Then open **<http://localhost:5555>**.
 
 ### 3. First run
 
