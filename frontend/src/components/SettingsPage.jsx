@@ -1115,7 +1115,7 @@ export default function SettingsPage({ onClose, onSaved, onChange }) {
   }
 
   return (
-    <div className="flex h-full min-w-0 bg-white dark:bg-neutral-950">
+    <div className="flex h-full min-w-0 flex-col bg-white dark:bg-neutral-950 lg:flex-row">
       {/* Left sidebar — categories */}
       <aside className="hidden lg:flex lg:flex-col w-56 border-r border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900">
         <div className="flex items-center justify-between h-14 px-4 border-b border-neutral-200 dark:border-neutral-800">

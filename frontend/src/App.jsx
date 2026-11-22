@@ -413,15 +413,17 @@ export default function App() {
       </main>
 
       {settingsPage && settings && (
-        <SettingsPage
-          settings={settings}
-          onClose={() => {
-            setSettingsPage(false)
-            navigate(chatPath(activeChat), { replace: true })
-          }}
-          onSaved={handleSettingsSaved}
-          onChange={handleSettingsChange}
-        />
+        <div className="fixed inset-0 z-50 overflow-hidden bg-white dark:bg-neutral-950">
+          <SettingsPage
+            settings={settings}
+            onClose={() => {
+              setSettingsPage(false)
+              navigate(chatPath(activeChat), { replace: true })
+            }}
+            onSaved={handleSettingsSaved}
+            onChange={handleSettingsChange}
+          />
+        </div>
       )}
     </div>
   )
