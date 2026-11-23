@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar.jsx'
 import ChatWindow from './components/ChatWindow.jsx'
 import SettingsPage from './components/SettingsPage.jsx'
+import SandboxPage from './components/SandboxPage.jsx'
 import { api } from './api.js'
 import useChat from './useChat.js'
-import { chatPath, navigate, onNavigate, parsePath, settingsPath } from './router.js'
+import { chatPath, navigate, onNavigate, parsePath, sandboxPath, settingsPath } from './router.js'
 
 function applyTheme(theme) {
   if (theme === 'system') {
@@ -18,6 +19,7 @@ function applyTheme(theme) {
 export default function App() {
   const [settings, setSettings] = useState(null)
   const [settingsPage, setSettingsPage] = useState(false)
+  const [sandboxPage, setSandboxPage] = useState(false)
   const [chats, setChats] = useState([])
   const [activeId, setActiveId] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -133,19 +135,21 @@ export default function App() {
           const deepLinked = route.kind === 'chat' ? rows.find((c) => c.id === route.id) : null
           const first = deepLinked || rows[0]
           setActiveId(first.id)
-          if (route.kind !== 'settings') navigate(chatPath(first), { replace: true })
+          if (route.kind !== 'settings' && route.kind !== 'sandbox') navigate(chatPath(first), { replace: true })
         } else {
           const chat = await api.createChat()
           if (!alive) return
           setChats([chat])
           setActiveId(chat.id)
-          if (route.kind !== 'settings') navigate(chatPath(chat), { replace: true })
+          if (route.kind !== 'settings' && route.kind !== 'sandbox') navigate(chatPath(chat), { replace: true })
         }
         if (!st.has_api_key) {
           setSettingsPage(true)
           navigate(settingsPath('providers', 'providers'))
         } else if (route.kind === 'settings') {
           setSettingsPage(true)
+        } else if (route.kind === 'sandbox') {
+          setSandboxPage(true)
         }
       } catch (err) {
         if (alive) setFatal(err.message)
@@ -168,14 +172,22 @@ export default function App() {
   }, [settings?.theme])
 
   // Keep the view in sync with the URL: /settings/... opens Settings,
-  // /chat/<id>-<slug> opens that chat (browser back/forward + navigate()).
+  // /sandbox opens the Sandbox, /chat/<id>-<slug> opens that chat
+  // (browser back/forward + navigate()).
   useEffect(() => {
     return onNavigate((route) => {
       if (route.kind === 'settings') {
         setSettingsPage(true)
+        setSandboxPage(false)
+        return
+      }
+      if (route.kind === 'sandbox') {
+        setSandboxPage(true)
+        setSettingsPage(false)
         return
       }
       setSettingsPage(false)
+      setSandboxPage(false)
       if (route.kind === 'chat') {
         const target = chats.find((c) => c.id === route.id)
         if (target) setActiveId(target.id)
@@ -423,6 +435,17 @@ export default function App() {
             }}
             onSaved={handleSettingsSaved}
             onChange={handleSettingsChange}
+          />
+        </div>
+      )}
+
+      {sandboxPage && (
+        <div className="fixed inset-0 z-50 overflow-hidden bg-white dark:bg-neutral-950">
+          <SandboxPage
+            onClose={() => {
+              setSandboxPage(false)
+              navigate(chatPath(activeChat), { replace: true })
+            }}
           />
         </div>
       )}

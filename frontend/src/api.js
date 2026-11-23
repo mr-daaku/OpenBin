@@ -51,6 +51,11 @@ export const api = {
   testSearch: (query) => request('/api/search/test', { method: 'POST', body: JSON.stringify({ query }) }),
   testFetch: (url) => request('/api/fetch/test', { method: 'POST', body: JSON.stringify({ url }) }),
 
+  // Sandbox (allowlisted commands, fixed workspace)
+  sandboxInfo: () => request('/api/sandbox'),
+  sandboxPreview: (command, args) => request('/api/sandbox/preview', { method: 'POST', body: JSON.stringify({ command, args }) }),
+  sandboxRun: (command, args) => request('/api/sandbox/run', { method: 'POST', body: JSON.stringify({ command, args, approve: true }) }),
+
   generateImage: (providerId, model, prompt, size, n) => request(`/api/providers/${providerId}/image`, { method: 'POST', body: JSON.stringify({ model, prompt, size, n }) }),
 
   // Memory

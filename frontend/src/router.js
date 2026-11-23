@@ -4,6 +4,7 @@
 //   /                     -> default (current chat)
 //   /chat/<id>-<slug>     -> a specific chat   (slug is cosmetic, id wins)
 //   /settings/<cat>/<tab> -> the Settings page
+//   /sandbox              -> the Sandbox page (allowlisted commands)
 //
 // navigate() pushes (or replaces) the URL and notifies listeners;
 // onNavigate() subscribes to both pushState calls and browser back/forward.
@@ -29,8 +30,13 @@ export function settingsPath(cat = 'general', tab = 'appearance') {
   return `/settings/${cat}/${tab}`
 }
 
+export function sandboxPath() {
+  return '/sandbox'
+}
+
 export function parsePath(pathname = window.location.pathname) {
   const p = String(pathname || '/').replace(/\/+$/, '') || '/'
+  if (p === '/sandbox') return { kind: 'sandbox' }
   if (p === '/settings' || p.startsWith('/settings/')) {
     const parts = p.split('/').filter(Boolean) // ['settings', cat, tab]
     return { kind: 'settings', cat: parts[1] || 'general', tab: parts[2] || null }

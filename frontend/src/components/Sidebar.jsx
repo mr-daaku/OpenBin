@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
-import { EyeOff, FileUp, Pin, PinOff, Pencil, Plus, Search, Trash2, X, Check } from 'lucide-react'
-import { navigate, settingsPath } from '../router.js'
+import { EyeOff, FileUp, Pin, PinOff, Pencil, Plus, Search, Terminal, Trash2, X, Check } from 'lucide-react'
+import { navigate, sandboxPath, settingsPath } from '../router.js'
 
 function groupOf(createdAt) {
   const d = new Date(String(createdAt).replace(' ', 'T') + 'Z')
@@ -229,6 +229,13 @@ export default function Sidebar({
               Settings
             </button>
           </div>
+          <button
+            onClick={() => navigate(sandboxPath())}
+            className="mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-xl border border-neutral-200 bg-white px-3 py-2.5 text-sm font-medium hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+          >
+            <Terminal size={15} />
+            Sandbox
+          </button>
         </div>
       </aside>
     </>

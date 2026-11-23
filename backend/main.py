@@ -29,6 +29,8 @@ from pydantic import BaseModel
 from webtools import DEFAULT_CHARS as FETCH_CHARS
 from webtools import FetchError, assert_public_url, fetch_image, fetch_page
 
+import sandbox as sandbox_mod
+
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
@@ -1927,6 +1929,51 @@ async def fetch_test(body: FetchTestIn):
         "chars": page["chars"],
         "text": page["text"],
     }
+
+
+# ------------------------------------------------------------- sandbox (Step 9)
+
+class SandboxIn(BaseModel):
+    command: str = ""
+    args: list = []
+    approve: bool = False
+
+
+@app.get("/api/sandbox")
+def sandbox_info():
+    """What the sandbox will accept + where commands run (shown in the UI)."""
+    return {
+        "workspace": str(sandbox_mod.WORKSPACE),
+        "allowed": list(sandbox_mod.ALLOWED_COMMANDS),
+        "timeout": sandbox_mod.RUN_TIMEOUT,
+    }
+
+
+@app.post("/api/sandbox/preview")
+def sandbox_preview(body: SandboxIn):
+    """Validate without executing: the approval card shows this cmdline."""
+    try:
+        name, argv = sandbox_mod.validate(body.command, body.args)
+    except sandbox_mod.SandboxError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {
+        "ok": True,
+        "cmdline": sandbox_mod.format_cmdline(name, argv),
+        "cwd": str(sandbox_mod.WORKSPACE),
+    }
+
+
+@app.post("/api/sandbox/run")
+def sandbox_run(body: SandboxIn):
+    """Execute an allowlisted command in the workspace. Never runs without
+    an explicit approve flag - the UI only sets it after the user confirms
+    the previewed command line."""
+    if not body.approve:
+        return {"ok": False, "error": "Not approved - nothing was run."}
+    try:
+        return sandbox_mod.run(body.command, body.args)
+    except sandbox_mod.SandboxError as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 # ------------------------------------------------- auto mode: tools + router

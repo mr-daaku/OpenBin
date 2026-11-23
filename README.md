@@ -19,6 +19,7 @@ A local, ChatGPT-style chat app. Everything runs on your computer and everything
 - **Model capabilities + vision gating** — capability DB with manual overrides; images are resized in the browser (1568px, JPEG 0.85) and blocked for models without vision.
 - **Image generation** — per-provider image endpoint config, size/count presets, multi-format response parser.
 - **Memory system** — memories / preferences / styles stored locally with CRUD API and Settings tabs (auto-extraction is a stub for now).
+- **Sandbox** — run a small allowlist of commands (`python`, `py`, `node`, `git`) inside one fixed workspace folder, with a preview-before-run approval step (see **Sandbox** below).
 - **Welcome screen** — suggestion cards for new chats (explain / code / plan / summarize).
 - **PWA** — installable (manifest + icons), service worker gives an offline shell for the UI (chat requests always need the backend).
 
@@ -161,6 +162,9 @@ OpenBin/
 | GET      | `/api/models/capabilities` | vision/tools/image/reasoning capabilities  |
 | POST     | `/api/search/test`         | one test web search                        |
 | POST     | `/api/fetch/test`          | read one page as text (SSRF-guarded)       |
+| GET      | `/api/sandbox`             | workspace + allowed commands + timeout     |
+| POST     | `/api/sandbox/preview`     | validate a command without running it      |
+| POST     | `/api/sandbox/run`         | run it in the workspace (needs `approve: true`) |
 | GET      | `/api/search?q=…&limit=6`  | direct search, returns `{results, errors}` |
 
 ## Web search
@@ -181,6 +185,23 @@ The chat input has four modes (the choice is remembered per browser):
   192.168.x), link-local and file:// URLs — checked before the request and again after every redirect.
   Pages are capped at 1.5 MB, 15 s and 6000 characters.
 - Page text and search results are treated as **data, never instructions**.
+
+## Sandbox
+
+The sidebar's **Sandbox** button (route `/sandbox`) runs short commands in a single fixed folder,
+`backend/data/workspace` (created on demand, git-ignored):
+
+- **Allowlist** — only `python`, `py`, `node` and `git` (executables found on PATH). No shell is
+  involved, so `cmd`, `powershell`, `npm` and pipes/redirects are not available; `..` in arguments
+  is rejected. Output is capped at 50 K characters, the run is killed after 30 s.
+- **Approval** — nothing executes on typing: *Preview command* shows the exact command line and
+  working directory, and only **Approve & run** executes it (`POST /api/sandbox/run` refuses to run
+  unless `approve: true`).
+
+**Best-effort disclaimer — this is a guard rail, not a security boundary.** Commands run as you,
+with OpenBin's own privileges, and interpreters like `python`/`node` can technically still do
+anything your user account can. It protects against fat-fingered and model-suggested commands, not
+against a hostile one. Only approve commands you would run yourself.
 
 ## Notes
 
