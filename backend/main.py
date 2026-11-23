@@ -27,7 +27,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from webtools import DEFAULT_CHARS as FETCH_CHARS
-from webtools import FetchError, assert_public_url, fetch_page
+from webtools import FetchError, assert_public_url, fetch_image, fetch_page
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -1990,6 +1990,22 @@ TOOL_DEFS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_image",
+            "description": (
+                "Download one image from the web and show it to you so you can "
+                "see it. Use when the user pastes an image URL or asks about a "
+                "picture, chart or photo hosted online. Only http(s) URLs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string", "description": "http(s) URL of the image"}},
+                "required": ["url"],
+            },
+        },
+    },
 ]
 
 
@@ -2006,8 +2022,12 @@ TOOL_ALIASES = {
     "fetch_page": "fetch_url",
     "search_web": "web_search",
     "web_search_preview": "web_search",
+    "view_image": "fetch_image",
+    "read_image": "fetch_image",
+    "get_image": "fetch_image",
+    "fetch_img": "fetch_image",
 }
-TOOL_NAMES = {"web_search", "fetch_url"}
+TOOL_NAMES = {"web_search", "fetch_url", "fetch_image"}
 
 
 def tools_key(run: dict) -> str:
@@ -2061,15 +2081,19 @@ def tool_label(name: str, args: dict) -> str:
     if "://" not in url:
         url = "https://" + url
     host = urllib.parse.urlparse(url).netloc.lower().removeprefix("www.")
+    if name == "fetch_image":
+        return f"Viewing image: {host or url[:60]}"
     return f"Reading: {host or url[:60]}"
 
 
 async def exec_tool(
-    name: str, args: dict, run: dict, sources: list, steps: list | None = None
+    name: str, args: dict, run: dict, sources: list, steps: list | None = None,
+    images: list | None = None,
 ) -> str:
     """Run one model tool. Appends anything citable to `sources`, any extra
-    trace line to `steps`, and returns the text handed back to the model.
-    Never raises for a normal tool failure."""
+    trace line to `steps`, any downloaded picture to `images` (so the caller
+    can hand it to the model as an image part), and returns the text handed
+    back to the model. Never raises for a normal tool failure."""
     if name == "web_search":
         query = str(args.get("query") or "").strip()[:400]
         if not query:
@@ -2109,6 +2133,29 @@ async def exec_tool(
             {"title": page["title"], "url": page["url"], "snippet": page["text"][:300]}
         )
         return f"Page title: {page['title']}\nURL: {page['url']}\n\n{page['text']}"
+    if name == "fetch_image":
+        url = str(args.get("url") or "").strip()[:2000]
+        if not url:
+            return "Error: no URL given."
+        if not run.get("has_vision", True):
+            return ("This model does not support image input, so the image was NOT "
+                    "downloaded. Tell the user to switch to a vision-capable model "
+                    "if they want images viewed.")
+        if images is not None and len(images) >= 4:
+            return "You already downloaded the maximum of 4 images for this reply. Answer with what you have."
+        try:
+            img = await asyncio.wait_for(fetch_image(url), timeout=TOOL_TIMEOUT_FETCH)
+        except FetchError as exc:
+            return f"Could not download that image: {exc}"
+        except (asyncio.TimeoutError, TimeoutError):
+            return f"Could not download that image: timed out after {TOOL_TIMEOUT_FETCH}s."
+        if images is not None:
+            images.append(img)
+        host = urllib.parse.urlparse(img["url"]).netloc.lower().removeprefix("www.")
+        sources.append({"title": f"Image: {host}", "url": img["url"], "snippet": img["mime"]})
+        kb = len(img["data"]) // 1024
+        return (f"Image downloaded ({img['mime']}, {kb} KB) from {host or url[:60]}. "
+                "It is attached as the next message - look at it and answer using what you see.")
     return f"Unknown tool: {name}."
 
 
@@ -2384,12 +2431,18 @@ async def generate(
         if run.get("top_p") is not None:
             kw["top_p"] = run["top_p"]
         if with_tools:
-            kw["tools"] = TOOL_DEFS
+            # A model that cannot see images is never offered fetch_image.
+            kw["tools"] = (
+                TOOL_DEFS
+                if run.get("has_vision", True)
+                else [t for t in TOOL_DEFS if t["function"]["name"] != "fetch_image"]
+            )
             kw["tool_choice"] = "auto"
         return kw
 
     with_tools = bool(use_tools)
     rounds = 0
+    fetched_images: list = []  # pictures fetch_image handed over this reply
 
     async def read_stream(stream):
         """Yield ('token', piece) while reading, then ('end', (text, calls))."""
@@ -2492,6 +2545,7 @@ async def generate(
 
             # Round N of tool calling: run the tools, feed the results back.
             rounds += 1
+            img_mark = len(fetched_images)
             messages.append(
                 {
                     "role": "assistant",
@@ -2516,7 +2570,7 @@ async def generate(
                         raise ValueError("arguments are not an object")
                 except ValueError:
                     args = {}
-                kind = "fetch" if tc["name"] == "fetch_url" else "search"
+                kind = {"fetch_url": "fetch", "fetch_image": "image"}.get(tc["name"], "search")
                 label = tool_label(tc["name"], args)
                 mark = len(steps)
                 steps.append({"kind": kind, "text": label})
@@ -2524,7 +2578,11 @@ async def generate(
                 timeout = TOOL_TIMEOUT_SEARCH if tc["name"] == "web_search" else TOOL_TIMEOUT_FETCH
                 try:
                     result = await asyncio.wait_for(
-                        exec_tool(tc["name"], args, run, source_list, steps), timeout=timeout
+                        exec_tool(
+                            tc["name"], args, run, source_list, steps,
+                            images=fetched_images,
+                        ),
+                        timeout=timeout,
                     )
                 except (asyncio.TimeoutError, TimeoutError):
                     result = f"The tool timed out after {timeout}s. Continue with what you have."
@@ -2546,6 +2604,18 @@ async def generate(
                         "content": result[:TOOL_RESULT_CHARS],
                     }
                 )
+
+            # Every tool result must follow its assistant message directly, so
+            # the pictures fetch_image downloaded ride in one user message
+            # AFTER all tool results of this round (vision input as image_url).
+            if len(fetched_images) > img_mark:
+                parts = [{"type": "text", "text": "Images fetched for you to look at:"}]
+                for img in fetched_images[img_mark:]:
+                    b64 = base64.b64encode(img["data"]).decode()
+                    parts.append(
+                        {"type": "image_url", "image_url": {"url": f"data:{img['mime']};base64,{b64}"}}
+                    )
+                messages.append({"role": "user", "content": parts})
 
             if rounds >= TOOL_MAX_ITERATIONS:
                 # Budget spent: the next call is forced to be plain prose.

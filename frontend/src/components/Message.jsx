@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, ChevronDown, Copy, ExternalLink, FileText, Globe, Info, Loader2, Pencil, RefreshCw, Search, Sparkles, Trash2, TriangleAlert, X } from 'lucide-react'
+import { Check, ChevronDown, Copy, ExternalLink, FileText, Globe, Image, Info, Loader2, Pencil, RefreshCw, Search, Sparkles, Trash2, TriangleAlert, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { extractArtifacts } from '../artifacts.js'
@@ -338,6 +338,7 @@ const STEP_STYLE = {
   plan: { icon: Sparkles, className: 'text-violet-500 dark:text-violet-400' },
   search: { icon: Search, className: 'text-sky-600 dark:text-sky-400' },
   fetch: { icon: Globe, className: 'text-emerald-600 dark:text-emerald-400' },
+  image: { icon: Image, className: 'text-fuchsia-600 dark:text-fuchsia-400' },
   answer: { icon: Check, className: 'text-neutral-500 dark:text-neutral-400' },
   info: { icon: Info, className: 'text-neutral-400 dark:text-neutral-500' },
   notice: { icon: TriangleAlert, className: 'text-amber-600 dark:text-amber-400' },

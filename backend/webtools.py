@@ -1,4 +1,4 @@
-"""Read a web page as plain text, safely.
+"""Read a web page as plain text, or download one image, safely.
 
 Deliberately small: stdlib + httpx (already pinned in requirements.txt).
 
@@ -10,6 +10,8 @@ checked BEFORE the request and again after EVERY redirect:
   * private ranges (10.x, 172.16-31.x, 192.168.x), link-local (169.254.x),
     CGNAT (100.64.x), loopback, unspecified, multicast, reserved
   * every address the hostname resolves to must pass the same check
+  * images obey the same rules, and must really be an image (the bytes are
+    checked, not just the Content-Type header)
 
 Plus hard limits: timeout, redirect count, response size and text length.
 """
@@ -27,6 +29,7 @@ FETCH_TOTAL_TIMEOUT = 30  # ceiling used by callers around the whole fetch
 MAX_REDIRECTS = 5
 MAX_BYTES = 1_500_000  # never buffer more than 1.5 MB of a page
 DEFAULT_CHARS = 6000  # max characters handed to the model
+IMAGE_MAX_BYTES = 8 * 1024 * 1024  # same cap as user-uploaded attachments
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -220,3 +223,97 @@ async def fetch_page(url: str, max_chars: int = DEFAULT_CHARS) -> dict:
         "text": text[:max_chars],
         "chars": len(text),
     }
+
+
+# ------------------------------------------------------------------ images
+
+_IMAGE_MAGIC = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+def sniff_image_mime(body: bytes) -> str:
+    """Recognise the image type from the bytes themselves ('' when unknown).
+
+    A lying or missing Content-Type must not smuggle HTML/JSON to the model
+    as if it were a picture, so the header alone is never trusted."""
+    if len(body) >= 12 and body[:4] == b"RIFF" and body[8:12] == b"WEBP":
+        return "image/webp"
+    for magic, mime in _IMAGE_MAGIC:
+        if body.startswith(magic):
+            return mime
+    if len(body) >= 2 and body[:2] == b"BM":
+        return "image/bmp"
+    return ""
+
+
+async def fetch_image(url: str, max_bytes: int = IMAGE_MAX_BYTES) -> dict:
+    """Download one image, guarded exactly like fetch_page (same SSRF checks
+    before every request and every redirect hop).
+
+    Returns {url, mime, data(bytes)}. Raises FetchError."""
+    url = (url or "").strip()
+    if not url:
+        raise FetchError("No URL given.")
+    if "://" not in url:
+        url = "https://" + url
+    url = url.strip()
+
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "image/*,*/*;q=0.1",
+    }
+
+    body = b""
+    header_mime = ""
+    hops = 0
+    try:
+        async with httpx.AsyncClient(follow_redirects=False, headers=headers) as client:
+            while True:
+                assert_public_url(url)  # before every request, redirects included
+                try:
+                    async with client.stream("GET", url, timeout=FETCH_TIMEOUT) as resp:
+                        if resp.status_code in (301, 302, 303, 307, 308):
+                            location = resp.headers.get("location")
+                            if not location:
+                                raise FetchError("That image redirected without a location.")
+                            hops += 1
+                            if hops > MAX_REDIRECTS:
+                                raise FetchError("Too many redirects.")
+                            url = urljoin(url, location)
+                            continue
+                        if resp.status_code >= 400:
+                            raise FetchError(f"That image answered with HTTP {resp.status_code}.")
+                        header_mime = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+                        chunks: list[bytes] = []
+                        size = 0
+                        async for chunk in resp.aiter_bytes():
+                            chunks.append(chunk)
+                            size += len(chunk)
+                            if size >= max_bytes:
+                                break
+                        body = b"".join(chunks)
+                except FetchError:
+                    raise
+                except httpx.TimeoutException:
+                    raise FetchError(f"Timed out after {FETCH_TIMEOUT}s.")
+                except httpx.HTTPError as exc:
+                    raise FetchError(f"Could not download that image ({exc.__class__.__name__}).")
+                break
+    except FetchError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - anything unexpected is a fetch failure
+        raise FetchError(f"Could not download that image ({exc.__class__.__name__}).")
+
+    if not body:
+        raise FetchError("That image is empty.")
+    if len(body) >= max_bytes:
+        raise FetchError(f"That image is larger than {max_bytes // (1024 * 1024)} MB.")
+    sniffed = sniff_image_mime(body)
+    if not sniffed:
+        detail = f" ({header_mime})" if header_mime else ""
+        raise FetchError(f"That URL does not return a recognisable image{detail}.")
+    return {"url": url, "mime": sniffed, "data": body}
